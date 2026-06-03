@@ -1,0 +1,51 @@
+version: 2
+
+project_name: igloo
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: igloo
+    main: ./cmd/igloo
+    binary: igloo
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: igloo
+    name_template: "igloo_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+
+checksum:
+  name_template: "igloo_{{ .Version }}_checksums.txt"
+
+release:
+  github:
+    owner: AsqaureBsquare
+    name: Igloo
+  name_template: "v{{.Version}}"
+  draft: false
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - Merge pull request

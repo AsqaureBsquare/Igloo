@@ -24,7 +24,7 @@ import (
 	"github.com/igloo-dev/igloo/internal/store"
 )
 
-const version = "0.1.0"
+var version = "dev"
 
 func main() {
 	if len(os.Args) < 2 {

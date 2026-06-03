@@ -53,6 +53,28 @@ resource "aws_dynamodb_table" "templates" {
   }
 }
 
+resource "aws_dynamodb_table" "provisioner_keys" {
+  name         = "igloo-provisioner-keys"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+
+  attribute {
+    name = "token_hash"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "token-hash-index"
+    hash_key        = "token_hash"
+    projection_type = "ALL"
+  }
+}
+
 resource "aws_dynamodb_table" "jobs" {
   name         = "igloo-ws-jobs"
   billing_mode = "PAY_PER_REQUEST"

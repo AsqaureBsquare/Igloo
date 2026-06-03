@@ -61,6 +61,8 @@ resource "aws_iam_role_policy" "server" {
           aws_dynamodb_table.templates.arn,
           aws_dynamodb_table.jobs.arn,
           "${aws_dynamodb_table.jobs.arn}/index/*",
+          aws_dynamodb_table.provisioner_keys.arn,
+          "${aws_dynamodb_table.provisioner_keys.arn}/index/*",
         ]
       },
       # ECS — Terraform creates/updates/destroys per-workspace services

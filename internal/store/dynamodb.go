@@ -14,11 +14,12 @@ import (
 )
 
 type DynamoStore struct {
-	client     *dynamodb.Client
-	users      string
-	workspaces string
-	templates  string
-	jobs       string
+	client          *dynamodb.Client
+	users           string
+	workspaces      string
+	templates       string
+	jobs            string
+	provisionerKeys string
 }
 
 func NewDynamoStore(ctx context.Context, region string) (*DynamoStore, error) {
@@ -27,11 +28,12 @@ func NewDynamoStore(ctx context.Context, region string) (*DynamoStore, error) {
 		return nil, err
 	}
 	return &DynamoStore{
-		client:     dynamodb.NewFromConfig(cfg),
-		users:      "igloo-users",
-		workspaces: "igloo-workspaces",
-		templates:  "igloo-templates",
-		jobs:       "igloo-ws-jobs",
+		client:          dynamodb.NewFromConfig(cfg),
+		users:           "igloo-users",
+		workspaces:      "igloo-workspaces",
+		templates:       "igloo-templates",
+		jobs:            "igloo-ws-jobs",
+		provisionerKeys: "igloo-provisioner-keys",
 	}, nil
 }
 
@@ -540,24 +542,112 @@ func (d *DynamoStore) ListStaleDaemonJobs(ctx context.Context, olderThan time.Du
 	return stale, nil
 }
 
-// ─── ProvisionerKeys (DynamoDB — TODO: add igloo-provisioner-keys table) ─────
+// ─── ProvisionerKeys ──────────────────────────────────────────────────────────
 
-func (d *DynamoStore) CreateProvisionerKey(_ context.Context, _ *models.ProvisionerKey) error {
-	return errors.New("provisioner keys not yet implemented for DynamoDB store")
+type provisionerKeyItem struct {
+	ID         string     `dynamodbav:"id"`
+	Name       string     `dynamodbav:"name"`
+	Tags       map[string]string `dynamodbav:"tags,omitempty"`
+	TokenHash  string     `dynamodbav:"token_hash"`
+	CreatedBy  string     `dynamodbav:"created_by"`
+	CreatedAt  time.Time  `dynamodbav:"created_at"`
+	LastUsedAt *time.Time `dynamodbav:"last_used_at,omitempty"`
 }
 
-func (d *DynamoStore) GetProvisionerKeyByTokenHash(_ context.Context, _ string) (*models.ProvisionerKey, error) {
-	return nil, ErrNotFound
+func keyItemToModel(item provisionerKeyItem) *models.ProvisionerKey {
+	return &models.ProvisionerKey{
+		ID:         item.ID,
+		Name:       item.Name,
+		Tags:       item.Tags,
+		TokenHash:  item.TokenHash,
+		CreatedBy:  item.CreatedBy,
+		CreatedAt:  item.CreatedAt,
+		LastUsedAt: item.LastUsedAt,
+	}
 }
 
-func (d *DynamoStore) ListProvisionerKeys(_ context.Context) ([]*models.ProvisionerKey, error) {
-	return nil, nil
+func (d *DynamoStore) CreateProvisionerKey(ctx context.Context, k *models.ProvisionerKey) error {
+	item, err := attributevalue.MarshalMap(provisionerKeyItem{
+		ID:        k.ID,
+		Name:      k.Name,
+		Tags:      k.Tags,
+		TokenHash: k.TokenHash,
+		CreatedBy: k.CreatedBy,
+		CreatedAt: k.CreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(d.provisionerKeys),
+		Item:      item,
+	})
+	return err
 }
 
-func (d *DynamoStore) DeleteProvisionerKey(_ context.Context, _ string) error {
-	return ErrNotFound
+func (d *DynamoStore) GetProvisionerKeyByTokenHash(ctx context.Context, hash string) (*models.ProvisionerKey, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              aws.String(d.provisionerKeys),
+		IndexName:              aws.String("token-hash-index"),
+		KeyConditionExpression: aws.String("token_hash = :h"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":h": &types.AttributeValueMemberS{Value: hash},
+		},
+		Limit: aws.Int32(1),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(out.Items) == 0 {
+		return nil, ErrNotFound
+	}
+	var item provisionerKeyItem
+	if err := attributevalue.UnmarshalMap(out.Items[0], &item); err != nil {
+		return nil, err
+	}
+	return keyItemToModel(item), nil
 }
 
-func (d *DynamoStore) TouchProvisionerKey(_ context.Context, _ string) error {
-	return nil
+func (d *DynamoStore) ListProvisionerKeys(ctx context.Context) ([]*models.ProvisionerKey, error) {
+	out, err := d.client.Scan(ctx, &dynamodb.ScanInput{
+		TableName: aws.String(d.provisionerKeys),
+	})
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]*models.ProvisionerKey, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var item provisionerKeyItem
+		if err := attributevalue.UnmarshalMap(raw, &item); err != nil {
+			continue
+		}
+		keys = append(keys, keyItemToModel(item))
+	}
+	return keys, nil
+}
+
+func (d *DynamoStore) DeleteProvisionerKey(ctx context.Context, id string) error {
+	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: aws.String(d.provisionerKeys),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
+		},
+	})
+	return err
+}
+
+func (d *DynamoStore) TouchProvisionerKey(ctx context.Context, id string) error {
+	now := time.Now()
+	nowStr := now.Format(time.RFC3339)
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName: aws.String(d.provisionerKeys),
+		Key: map[string]types.AttributeValue{
+			"id": &types.AttributeValueMemberS{Value: id},
+		},
+		UpdateExpression: aws.String("SET last_used_at = :t"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":t": &types.AttributeValueMemberS{Value: nowStr},
+		},
+	})
+	return err
 }

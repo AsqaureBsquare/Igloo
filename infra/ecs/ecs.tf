@@ -7,8 +7,9 @@ resource "aws_cloudwatch_log_group" "server" {
   retention_in_days = 7
 }
 
-resource "aws_cloudwatch_log_group" "workspace" {
-  name              = "/ecs/${var.app}/workspace"
+# Log group for all workspace containers — must exist before first workspace starts.
+resource "aws_cloudwatch_log_group" "workspaces" {
+  name              = "/igloo/workspaces"
   retention_in_days = 3
 }
 
@@ -30,13 +31,15 @@ resource "aws_ecs_task_definition" "server" {
     portMappings = [{ containerPort = 8080, protocol = "tcp" }]
 
     environment = [
-      { name = "AWS_REGION",           value = var.region },
-      { name = "IGLOO_JWT_SECRET",     value = var.jwt_secret },
-      { name = "IGLOO_ECS_CLUSTER",    value = aws_ecs_cluster.main.arn },
-      { name = "IGLOO_ECS_TASK_DEF",   value = aws_ecs_task_definition.workspace.arn },
-      { name = "IGLOO_ECS_SUBNETS",    value = join(",", aws_subnet.public[*].id) },
-      { name = "IGLOO_ECS_SG",         value = aws_security_group.workspace.id },
-      { name = "IGLOO_SERVER_URL",     value = "http://${aws_lb.main.dns_name}" },
+      { name = "AWS_REGION",                  value = var.region },
+      { name = "IGLOO_JWT_SECRET",            value = var.jwt_secret },
+      { name = "IGLOO_ECS_CLUSTER",           value = aws_ecs_cluster.main.arn },
+      { name = "IGLOO_ECS_EXECUTION_ROLE_ARN", value = aws_iam_role.execution.arn },
+      { name = "IGLOO_ECS_TASK_ROLE_ARN",     value = aws_iam_role.workspace.arn },
+      { name = "IGLOO_ECS_SUBNETS",           value = join(",", aws_subnet.public[*].id) },
+      { name = "IGLOO_ECS_SG",               value = aws_security_group.workspace.id },
+      { name = "IGLOO_WORKSPACE_IMAGE",       value = var.workspace_image },
+      { name = "IGLOO_TF_STATE_BUCKET",       value = aws_s3_bucket.tf_state.id },
     ]
 
     logConfiguration = {
@@ -45,34 +48,6 @@ resource "aws_ecs_task_definition" "server" {
         "awslogs-group"         = aws_cloudwatch_log_group.server.name
         "awslogs-region"        = var.region
         "awslogs-stream-prefix" = "server"
-      }
-    }
-  }])
-}
-
-# ─── Workspace task definition ────────────────────────────────────────────────
-
-resource "aws_ecs_task_definition" "workspace" {
-  family                   = "${var.app}-workspace"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = 512
-  memory                   = 1024
-  execution_role_arn       = aws_iam_role.execution.arn
-
-  container_definitions = jsonencode([{
-    name  = "workspace"
-    image = var.workspace_image
-
-    # env vars injected at runtime via RunTask container overrides
-    environment = []
-
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.workspace.name
-        "awslogs-region"        = var.region
-        "awslogs-stream-prefix" = "workspace"
       }
     }
   }])
@@ -101,7 +76,6 @@ resource "aws_ecs_service" "server" {
 
   depends_on = [aws_lb_listener.http]
 
-  # Allow deploy script to update the task definition without Terraform drift
   lifecycle {
     ignore_changes = [task_definition]
   }

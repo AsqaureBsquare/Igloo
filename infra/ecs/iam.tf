@@ -20,7 +20,15 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# ─── Server task role (DynamoDB + ECS RunTask) ────────────────────────────────
+# ─── Workspace task role (minimal — agent uses outbound WebSocket only) ────────
+
+resource "aws_iam_role" "workspace" {
+  name               = "${var.app}-workspace-role"
+  assume_role_policy = data.aws_iam_policy_document.ecs_assume.json
+}
+
+# ─── Server task role ─────────────────────────────────────────────────────────
+# Needs to run Terraform that creates/updates/destroys ECS services + task defs.
 
 resource "aws_iam_role" "server" {
   name               = "${var.app}-server-role"
@@ -34,6 +42,7 @@ resource "aws_iam_role_policy" "server" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # DynamoDB — users, workspaces, templates
       {
         Effect = "Allow"
         Action = [
@@ -41,7 +50,8 @@ resource "aws_iam_role_policy" "server" {
           "dynamodb:PutItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",
-          "dynamodb:Scan"
+          "dynamodb:Scan",
+          "dynamodb:UpdateItem"
         ]
         Resource = [
           aws_dynamodb_table.users.arn,
@@ -51,20 +61,45 @@ resource "aws_iam_role_policy" "server" {
           aws_dynamodb_table.templates.arn,
         ]
       },
+      # ECS — Terraform creates/updates/destroys per-workspace services
       {
-        Effect   = "Allow"
-        Action   = ["ecs:RunTask", "ecs:StopTask", "ecs:DescribeTasks"]
+        Effect = "Allow"
+        Action = [
+          "ecs:RegisterTaskDefinition",
+          "ecs:DeregisterTaskDefinition",
+          "ecs:DescribeTaskDefinition",
+          "ecs:CreateService",
+          "ecs:UpdateService",
+          "ecs:DeleteService",
+          "ecs:DescribeServices",
+          "ecs:ListServices",
+          "ecs:DescribeClusters"
+        ]
         Resource = "*"
       },
+      # IAM PassRole — Terraform passes execution + workspace roles to ECS
       {
-        Effect   = "Allow"
-        Action   = ["iam:PassRole"]
-        Resource = aws_iam_role.execution.arn
+        Effect = "Allow"
+        Action = ["iam:PassRole"]
+        Resource = [
+          aws_iam_role.execution.arn,
+          aws_iam_role.workspace.arn,
+        ]
       },
+      # S3 — Terraform state for each workspace
       {
         Effect   = "Allow"
-        Action   = ["logs:GetLogEvents", "logs:FilterLogEvents", "logs:DescribeLogStreams"]
-        Resource = "arn:aws:logs:*:*:log-group:/ecs/igloo/*"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
+        Resource = [
+          aws_s3_bucket.tf_state.arn,
+          "${aws_s3_bucket.tf_state.arn}/*",
+        ]
+      },
+      # CloudWatch Logs — read workspace container logs
+      {
+        Effect   = "Allow"
+        Action   = ["logs:FilterLogEvents", "logs:DescribeLogStreams", "logs:GetLogEvents"]
+        Resource = "arn:aws:logs:*:*:log-group:/igloo/workspaces:*"
       }
     ]
   })

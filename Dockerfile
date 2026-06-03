@@ -6,7 +6,12 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o igloo ./cmd/igloo
 
 FROM alpine:3.19
-RUN apk add --no-cache ca-certificates tzdata
+ARG TERRAFORM_VERSION=1.9.8
+RUN apk add --no-cache ca-certificates tzdata unzip wget && \
+    wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
+    unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
+    mv terraform /usr/local/bin/ && \
+    rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
 WORKDIR /app
 COPY --from=builder /app/igloo .
 COPY templates/ templates/

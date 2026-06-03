@@ -55,8 +55,6 @@ resource "aws_ecs_service" "workspace" {
   launch_type      = "FARGATE"
   platform_version = "LATEST"
 
-  enable_execute_command = true
-
   network_configuration {
     subnets          = local.subnet_ids
     security_groups  = [var.security_group_id]

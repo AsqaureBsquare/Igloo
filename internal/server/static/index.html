@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Igloo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<!-- Auth pages are rendered here by JS -->
+<div id="root"></div>
+
+<!-- Toast stack -->
+<div class="toast-stack" id="toast-stack"></div>
+
+<!-- Terminal panel (hidden until a workspace is connected) -->
+<div class="terminal-panel" id="terminal-panel">
+  <div class="terminal-header">
+    <div class="terminal-title">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <span id="terminal-workspace-name">terminal</span>
+    </div>
+    <div class="terminal-actions">
+      <button class="btn-icon" title="Maximise" onclick="app.maximiseTerminal()">⤢</button>
+      <button class="btn-icon" title="Close" onclick="app.closeTerminal()">✕</button>
+    </div>
+  </div>
+  <div class="terminal-body">
+    <div id="xterm-container"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

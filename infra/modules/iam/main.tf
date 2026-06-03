@@ -145,6 +145,42 @@ data "aws_iam_policy_document" "lambda_control_plane" {
     ]
     resources = ["arn:aws:logs:${local.region}:${local.account_id}:log-group:/igloo/*"]
   }
+
+  # WebSocket API — PostToConnection for the relay Lambdas
+  statement {
+    sid    = "WebSocketRelay"
+    effect = "Allow"
+    actions = ["execute-api:ManageConnections"]
+    resources = ["arn:aws:execute-api:${local.region}:${local.account_id}:*/*/@connections/*"]
+  }
+
+  # DynamoDB — WebSocket connection tracking
+  statement {
+    sid    = "DynamoDBWSConnections"
+    effect = "Allow"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:DeleteItem",
+      "dynamodb:Query",
+    ]
+    resources = [
+      "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.project}-ws-connections",
+      "arn:aws:dynamodb:${local.region}:${local.account_id}:table/${var.project}-ws-connections/index/*",
+    ]
+  }
+
+  # SSM — read JWT signing key and WebSocket endpoint URL at runtime
+  statement {
+    sid    = "SSMReadSecrets"
+    effect = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project}/ws-signing-key",
+      "arn:aws:ssm:${local.region}:${local.account_id}:parameter/${var.project}/ws-api-endpoint",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "lambda_control_plane" {

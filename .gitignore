@@ -13,5 +13,16 @@ __pycache__/
 .venv/
 venv/
 
+# Go
+igloo
+igloo-agent
+*.exe
+
 # macOS
 .DS_Store
+
+# Claude Code
+.claude/
+
+# Secrets
+infra/ecs/terraform.tfvars

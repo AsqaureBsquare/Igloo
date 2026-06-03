@@ -40,7 +40,7 @@ def lambda_handler(event, context):
         return {
             "statusCode": 200,
             "headers":    {"Content-Type": "application/json"},
-            "body":       json.dumps(connection),
+            "body":       json.dumps(connection),  # {ws_url, ticket, workspace_id}
         }
 
     except ValueError as e:

@@ -4,14 +4,14 @@ locals {
   timeout  = 300
 
   env = {
-    WORKSPACES_TABLE      = var.workspaces_table_name
-    ECS_CLUSTER           = var.ecs_cluster_name
-    TASK_DEFINITION       = var.task_definition_family
-    WORKSPACE_SG_ID       = var.workspace_sg_id
-    PRIVATE_SUBNET_IDS    = join(",", var.private_subnet_ids)
-    FARGATE_TASK_ROLE_ARN      = var.fargate_task_role_arn
+    WORKSPACES_TABLE            = var.workspaces_table_name
+    ECS_CLUSTER                 = var.ecs_cluster_name
+    TASK_DEFINITION             = var.task_definition_family
+    WORKSPACE_SG_ID             = var.workspace_sg_id
+    PRIVATE_SUBNET_IDS          = join(",", var.private_subnet_ids)
+    FARGATE_TASK_ROLE_ARN       = var.fargate_task_role_arn
     ECS_INFRASTRUCTURE_ROLE_ARN = var.ecs_infrastructure_role_arn
-    IDLE_TIMEOUT_MINUTES  = tostring(var.idle_timeout_minutes)
+    IDLE_TIMEOUT_MINUTES        = tostring(var.idle_timeout_minutes)
   }
 }
 
@@ -27,6 +27,7 @@ locals {
   layer_src_hash = sha256(join("", [
     filesha256("${local.src_root}core/models.py"),
     filesha256("${local.src_root}core/db.py"),
+    filesha256("${local.src_root}core/jwt_utils.py"),
     filesha256("${local.src_root}core/providers/__init__.py"),
     filesha256("${local.src_root}core/providers/base.py"),
     filesha256("${local.src_root}core/providers/aws.py"),
@@ -46,6 +47,7 @@ resource "null_resource" "build_layer" {
       pip3 install boto3 --quiet --upgrade -t "${local.layer_build_dir}/python"
       cp "${local.src_root}core/models.py"              "${local.layer_build_dir}/python/models.py"
       cp "${local.src_root}core/db.py"                  "${local.layer_build_dir}/python/db.py"
+      cp "${local.src_root}core/jwt_utils.py"           "${local.layer_build_dir}/python/jwt_utils.py"
       mkdir -p "${local.layer_build_dir}/python/providers"
       cp "${local.src_root}core/providers/__init__.py"  "${local.layer_build_dir}/python/providers/__init__.py"
       cp "${local.src_root}core/providers/base.py"      "${local.layer_build_dir}/python/providers/base.py"

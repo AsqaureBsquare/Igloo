@@ -1,10 +1,12 @@
 import os
+import time  # used by _generate_ticket
 import uuid
 import logging
 import boto3
 from typing import List, Optional
 from models import Workspace, WorkspaceStatus, WorkspaceType
 from providers.base import WorkspaceProvider
+import jwt_utils
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +30,59 @@ class AWSProvider(WorkspaceProvider):
 
         self._ecs = boto3.client("ecs", region_name=self.region)
         self._ec2 = boto3.client("ec2",  region_name=self.region)
+        self._ssm = boto3.client("ssm",  region_name=self.region)
+
+        # Cached SSM values (populated on first use)
+        self._signing_key: Optional[str] = None
+        self._ws_endpoint:  Optional[str] = None
 
     # ─── helpers ──────────────────────────────────────────────────────────────
 
+    def _get_signing_key(self) -> str:
+        if not self._signing_key:
+            param = self._ssm.get_parameter(
+                Name=os.environ["JWT_SIGNING_KEY_PARAM"],
+                WithDecryption=True,
+            )
+            self._signing_key = param["Parameter"]["Value"]
+        return self._signing_key
+
+    def _get_ws_endpoint(self) -> str:
+        if not self._ws_endpoint:
+            param = self._ssm.get_parameter(Name=os.environ["WS_ENDPOINT_PARAM"])
+            self._ws_endpoint = param["Parameter"]["Value"]
+        return self._ws_endpoint
+
+    def _generate_ticket(self, workspace_id: str, user_id: str, role: str, ttl_seconds: int = 3600) -> str:
+        return jwt_utils.encode(
+            {
+                "workspace_id": workspace_id,
+                "user_id":      user_id,
+                "role":         role,
+                "exp":          int(time.time()) + ttl_seconds,
+            },
+            self._get_signing_key(),
+        )
+
     def _run_task(self, subnet_id: str, volume_config: dict, workspace_id: str, user_id: str) -> str:
         """Launch a Fargate task with the given EBS volume configuration."""
-        resp = self._ecs.run_task(
+        # Build agent env overrides — gracefully skip if SSM is unavailable.
+        container_overrides: list = []
+        try:
+            ws_url = self._get_ws_endpoint()
+            ticket = self._generate_ticket(workspace_id, user_id, role="agent", ttl_seconds=86400)
+            container_overrides = [{
+                "name": "workspace",
+                "environment": [
+                    {"name": "IGLOO_WS_URL",       "value": ws_url},
+                    {"name": "IGLOO_TICKET",        "value": ticket},
+                    {"name": "IGLOO_WORKSPACE_ID",  "value": workspace_id},
+                ],
+            }]
+        except Exception as e:
+            logger.warning("Could not fetch WS config for agent injection: %s", e)
+
+        kwargs = dict(
             cluster=self.cluster_name,
             taskDefinition=self.task_def_family,
             launchType="FARGATE",
@@ -55,6 +104,10 @@ class AWSProvider(WorkspaceProvider):
                 {"key": "igloo:user_id",      "value": user_id},
             ],
         )
+        if container_overrides:
+            kwargs["overrides"] = {"containerOverrides": container_overrides}
+
+        resp = self._ecs.run_task(**kwargs)
 
         failures = resp.get("failures", [])
         if failures:
@@ -162,43 +215,17 @@ class AWSProvider(WorkspaceProvider):
                 logger.warning("Could not delete volume %s: %s", workspace.volume_id, e)
 
     def get_connection(self, workspace: Workspace) -> dict:
-        import time
-        from botocore.exceptions import ClientError
-
         if workspace.status != WorkspaceStatus.RUNNING:
             raise ValueError(f"Workspace {workspace.workspace_id} is not running")
 
-        task_id = workspace.task_arn.split("/")[-1]
-
-        # SSM may not be ready immediately after ECS reports the agent RUNNING.
-        # Retry for up to 30s on TargetNotConnected.
-        for attempt in range(6):
-            try:
-                resp = self._ecs.execute_command(
-                    cluster=self.cluster_name,
-                    task=task_id,
-                    container="workspace",
-                    command="/bin/bash",
-                    interactive=True,
-                )
-                break
-            except Exception as e:
-                err = str(e)
-                if ("TargetNotConnected" in err or "execute command agent" in err.lower()) and attempt < 5:
-                    logger.info("ECS Exec not ready yet (attempt %d/6), retrying in 5s...", attempt + 1)
-                    time.sleep(5)
-                else:
-                    raise
-
-        session = resp["session"]
+        ws_url = self._get_ws_endpoint()
+        ticket = self._generate_ticket(
+            workspace.workspace_id, workspace.user_id, role="browser", ttl_seconds=3600
+        )
         return {
-            "type":        "ecs_exec",
-            "cluster":     self.cluster_name,
-            "task_arn":    workspace.task_arn,
-            "session_id":  session["sessionId"],
-            "stream_url":  session["streamUrl"],
-            "token_value": session["tokenValue"],
-            "region":      self.region,
+            "ws_url":       ws_url,
+            "ticket":       ticket,
+            "workspace_id": workspace.workspace_id,
         }
 
     def get_status(self, workspace: Workspace) -> WorkspaceStatus:

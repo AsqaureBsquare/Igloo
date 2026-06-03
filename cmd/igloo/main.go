@@ -39,6 +39,8 @@ func main() {
 		runLogin(os.Args[2:])
 	case "proxy":
 		runProxy(os.Args[2:])
+	case "provisioner-keys", "pkeys":
+		runProvisionerKeys(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("igloo %s\n", version)
 	default:
@@ -51,10 +53,16 @@ func printUsage() {
 	fmt.Print(`igloo — serverless dev workspaces
 
 Usage:
-  igloo server [--port 8080] [--local]   Start the control plane
-  igloo login <server-url> <email>        Authenticate and save credentials
-  igloo proxy <workspace-id>             SSH ProxyCommand — pipe stdin/stdout to workspace port 22
-  igloo version                           Print version
+  igloo server [--port 8080] [--local]        Start the control plane
+  igloo login <server-url> <email>             Authenticate and save credentials
+  igloo proxy <workspace-id>                  SSH ProxyCommand
+  igloo provisioner-keys <subcommand>         Manage provisioner keys (admin)
+  igloo version                                Print version
+
+Provisioner key subcommands:
+  igloo provisioner-keys create <name> [--tag k=v]...
+  igloo provisioner-keys list
+  igloo provisioner-keys revoke <id>
 
 SSH setup:
   1. igloo login http://your-server.com you@example.com
@@ -358,4 +366,130 @@ func runServer(args []string) {
 	if err := http.ListenAndServe(addr, srv); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// ─── provisioner-keys subcommand ─────────────────────────────────────────────
+
+func runProvisionerKeys(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo provisioner-keys <create|list|revoke>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "create":
+		runPKCreate(args[1:])
+	case "list":
+		runPKList()
+	case "revoke":
+		runPKRevoke(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func runPKCreate(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo provisioner-keys create <name> [--tag k=v]...")
+		os.Exit(1)
+	}
+	name := args[0]
+	tags := map[string]string{}
+	for i := 1; i < len(args); i++ {
+		if args[i] == "--tag" && i+1 < len(args) {
+			parts := strings.SplitN(args[i+1], "=", 2)
+			if len(parts) == 2 {
+				tags[parts[0]] = parts[1]
+			}
+			i++
+		}
+	}
+
+	sess := mustLoadSession()
+	body, _ := json.Marshal(map[string]any{"name": name, "tags": tags})
+	req, _ := http.NewRequest("POST", sess.ServerURL+"/api/admin/provisioner-keys", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != http.StatusCreated {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", result["error"])
+		os.Exit(1)
+	}
+
+	fmt.Printf("Key created\n")
+	fmt.Printf("  ID:    %s\n", result["id"])
+	fmt.Printf("  Name:  %s\n", result["name"])
+	fmt.Printf("  Token: %s\n", result["token"])
+	fmt.Printf("\nSave the token — it will not be shown again.\n")
+	fmt.Printf("Set on your provisioner: IGLOO_PROVISIONER_KEY=%s\n", result["token"])
+}
+
+func runPKList() {
+	sess := mustLoadSession()
+	req, _ := http.NewRequest("GET", sess.ServerURL+"/api/admin/provisioner-keys", nil)
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var keys []map[string]any
+	json.NewDecoder(resp.Body).Decode(&keys)
+
+	if len(keys) == 0 {
+		fmt.Println("No provisioner keys.")
+		return
+	}
+
+	fmt.Printf("%-36s  %-20s  %-10s  %s\n", "ID", "NAME", "CREATED BY", "LAST USED")
+	fmt.Println(strings.Repeat("-", 90))
+	for _, k := range keys {
+		lastUsed := "never"
+		if lu, ok := k["last_used_at"].(string); ok && lu != "" {
+			lastUsed = lu
+		}
+		fmt.Printf("%-36s  %-20s  %-10s  %s\n",
+			k["id"], k["name"], k["created_by"], lastUsed)
+	}
+}
+
+func runPKRevoke(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo provisioner-keys revoke <id>")
+		os.Exit(1)
+	}
+	id := args[0]
+	sess := mustLoadSession()
+	req, _ := http.NewRequest("DELETE", sess.ServerURL+"/api/admin/provisioner-keys/"+id, nil)
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent {
+		fmt.Printf("Key %s revoked.\n", id)
+	} else {
+		fmt.Fprintf(os.Stderr, "Failed to revoke key (HTTP %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
+}
+
+func mustLoadSession() *session {
+	sess, err := loadSession()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Not logged in. Run: igloo login <server-url> <email>")
+		os.Exit(1)
+	}
+	return sess
 }

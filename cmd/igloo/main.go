@@ -376,11 +376,11 @@ func runProvisionerKeys(args []string) {
 		os.Exit(1)
 	}
 	switch args[0] {
-	case "create":
+	case "create", "new":
 		runPKCreate(args[1:])
-	case "list":
+	case "list", "ls":
 		runPKList()
-	case "revoke":
+	case "revoke", "rm", "delete":
 		runPKRevoke(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", args[0])

@@ -37,8 +37,10 @@ const api = (() => {
       vsCodeToken: (id) => req('GET', `/api/workspaces/${id}/vscode-token`),
     },
     templates: {
-      list:  ()   => req('GET', `/api/templates`),
-      files: (id) => req('GET', `/api/templates/${id}/files`),
+      list:   ()          => req('GET',  `/api/templates`),
+      files:  (id)        => req('GET',  `/api/templates/${id}/files`),
+      create: (body)      => req('POST', `/api/templates`, body),
+      update: (id, body)  => req('PUT',  `/api/templates/${id}`, body),
     },
     admin: {
       listUsers:  ()          => req('GET',    '/api/admin/users'),
@@ -334,8 +336,12 @@ function renderWorkspacesView() {
 }
 
 function renderTemplatesView(selectedId) {
+  const isAdmin = state.user?.is_admin;
   document.getElementById('view-title').textContent = 'Templates';
-  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('topbar-actions').innerHTML = isAdmin
+    ? `<button class="btn btn-primary" onclick="app.showNewTemplate()">${icon.plus} New template</button>`
+    : '';
+
   const sel = selectedId || state.templates[0]?.id;
   const el = document.getElementById('content');
   el.innerHTML = `
@@ -344,10 +350,11 @@ function renderTemplatesView(selectedId) {
       ${state.templates.map(t => `
         <div class="tpl-list-item${t.id === sel ? ' selected' : ''}" onclick="app.selectTemplateView('${t.id}')">
           <span class="template-icon" style="font-size:1.2em">${t.icon || '📦'}</span>
-          <div>
+          <div style="flex:1;min-width:0">
             <div class="template-name">${esc(t.name)}</div>
             <div class="template-desc text-sm text-muted">${esc(t.description)}</div>
           </div>
+          ${isAdmin ? `<button class="btn btn-ghost btn-sm" style="flex-shrink:0" onclick="event.stopPropagation();app.editTemplate('${t.id}')">Edit</button>` : ''}
         </div>`).join('')}
     </div>
     <div class="templates-code" id="tpl-code">
@@ -430,6 +437,79 @@ async function renderUsersView() {
   } catch(e) {
     el.innerHTML = `<div class="text-muted" style="padding:24px">Failed to load users: ${esc(e.message)}</div>`;
   }
+}
+
+// ─── Template edit / create modals (admin) ────────────────────────────────────
+
+function templateFilesHTML(files) {
+  const entries = Object.entries(files || {}).sort(([a],[b]) => a.localeCompare(b));
+  if (!entries.length) entries.push(['main.tf', '']);
+  return entries.map(([name, content], i) => `
+    <div class="tf-editor-block" data-idx="${i}">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <input class="tf-filename" type="text" value="${esc(name)}" placeholder="main.tf" style="font-family:var(--mono);font-size:12px;flex:1" />
+        <button class="btn btn-ghost btn-sm" onclick="this.closest('.tf-editor-block').remove()">✕</button>
+      </div>
+      <textarea class="tf-editor" rows="12" spellcheck="false">${esc(content)}</textarea>
+    </div>`).join('');
+}
+
+function collectTemplateFiles(modal) {
+  const files = {};
+  modal.querySelectorAll('.tf-editor-block').forEach(block => {
+    const name = block.querySelector('.tf-filename').value.trim();
+    const content = block.querySelector('.tf-editor').value;
+    if (name) files[name] = content;
+  });
+  return files;
+}
+
+async function showTemplateModal(template) {
+  const isNew = !template;
+  let files = {};
+  if (!isNew) {
+    try { files = await api.templates.files(template.id); } catch {}
+  }
+
+  document.getElementById('tpl-modal')?.remove();
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal-overlay" id="tpl-modal">
+    <div class="modal modal-wide" style="max-width:740px">
+      <div class="modal-header">
+        <h2>${isNew ? 'New template' : 'Edit template'}</h2>
+        <button class="btn-icon" onclick="document.getElementById('tpl-modal').remove()">✕</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 80px;gap:10px;margin-bottom:16px">
+        <div class="field" style="margin:0">
+          <label>Name</label>
+          <input id="tpl-name" type="text" value="${esc(template?.name || '')}" placeholder="My Template" />
+        </div>
+        <div class="field" style="margin:0">
+          <label>Provider</label>
+          <input id="tpl-provider" type="text" value="${esc(template?.provider || '')}" placeholder="aws-fargate" ${!isNew ? 'readonly style="opacity:.6"' : ''} />
+        </div>
+        <div class="field" style="margin:0">
+          <label>Icon</label>
+          <input id="tpl-icon" type="text" value="${esc(template?.icon || '')}" placeholder="🚀" style="font-size:18px;text-align:center" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input id="tpl-desc" type="text" value="${esc(template?.description || '')}" placeholder="Short description shown to users" />
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px">
+        <label style="font-weight:500">Terraform files</label>
+        <button class="btn btn-ghost btn-sm" onclick="app._addTfFile()">+ Add file</button>
+      </div>
+      <div id="tpl-files">${templateFilesHTML(files)}</div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="document.getElementById('tpl-modal').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="app.saveTemplate('${template?.id || ''}')">
+          ${isNew ? 'Create template' : 'Save changes'}
+        </button>
+      </div>
+    </div>
+  </div>`);
 }
 
 // ─── New workspace modal ──────────────────────────────────────────────────────
@@ -638,6 +718,55 @@ window.app = {
       state.workspaces = state.workspaces.filter(w => w.id !== id);
       renderWorkspacesView();
       toast(`Workspace destroyed`);
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  showNewTemplate() { showTemplateModal(null); },
+
+  async editTemplate(id) {
+    const t = state.templates.find(t => t.id === id);
+    await showTemplateModal(t);
+  },
+
+  _addTfFile() {
+    const container = document.getElementById('tpl-files');
+    const idx = container.querySelectorAll('.tf-editor-block').length;
+    const div = document.createElement('div');
+    div.innerHTML = `
+      <div class="tf-editor-block" data-idx="${idx}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <input class="tf-filename" type="text" value="" placeholder="variables.tf" style="font-family:var(--mono);font-size:12px;flex:1" />
+          <button class="btn btn-ghost btn-sm" onclick="this.closest('.tf-editor-block').remove()">✕</button>
+        </div>
+        <textarea class="tf-editor" rows="12" spellcheck="false"></textarea>
+      </div>`;
+    container.appendChild(div.firstElementChild);
+  },
+
+  async saveTemplate(id) {
+    const modal = document.getElementById('tpl-modal');
+    const name     = document.getElementById('tpl-name').value.trim();
+    const provider = document.getElementById('tpl-provider').value.trim();
+    const icon     = document.getElementById('tpl-icon').value.trim();
+    const desc     = document.getElementById('tpl-desc').value.trim();
+    const files    = collectTemplateFiles(modal);
+
+    if (!name) { toast('Name is required', 'error'); return; }
+
+    try {
+      if (id) {
+        const updated = await api.templates.update(id, { name, description: desc, icon, files });
+        const idx = state.templates.findIndex(t => t.id === id);
+        if (idx !== -1) state.templates[idx] = updated;
+        toast('Template saved', 'success');
+      } else {
+        if (!provider) { toast('Provider is required', 'error'); return; }
+        const created = await api.templates.create({ name, provider, description: desc, icon, files });
+        state.templates.push(created);
+        toast('Template created', 'success');
+      }
+      modal.remove();
+      renderTemplatesView(id || state.templates[state.templates.length - 1]?.id);
     } catch(e) { toast(e.message, 'error'); }
   },
 

@@ -725,3 +725,30 @@ input { font-family: inherit; }
 }
 .users-table tbody tr:last-child td { border-bottom: none; }
 .users-table tbody tr:hover { background: var(--surface2); }
+
+/* ─── Template editor ─────────────────────────────────────────────────────── */
+.tf-editor-block { margin-bottom: 16px; }
+.tf-editor {
+  width: 100%;
+  background: #0d0d0d;
+  color: #e5e5e5;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  resize: vertical;
+  tab-size: 2;
+}
+.tf-editor:focus { outline: none; border-color: var(--blue); }
+.tf-filename {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.tf-filename:focus { outline: none; border-color: var(--blue); }
+.tpl-list-item { display: flex; align-items: center; gap: 10px; }

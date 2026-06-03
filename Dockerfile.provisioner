@@ -1,0 +1,28 @@
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o igloo-provisioner ./cmd/provisioner
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+ARG TF_VERSION=1.9.8
+ARG TARGETARCH=amd64
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates && \
+    curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${TARGETARCH}.zip" \
+      -o /tmp/tf.zip && \
+    unzip /tmp/tf.zip -d /usr/local/bin && \
+    rm /tmp/tf.zip && \
+    apt-get purge -y --auto-remove curl unzip && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV TF_PLUGIN_CACHE_DIR=/root/.terraform.d/plugin-cache
+RUN mkdir -p /root/.terraform.d/plugin-cache
+COPY prebake/ /prebake/
+RUN cd /prebake && terraform init -backend=false
+
+COPY --from=builder /app/igloo-provisioner /usr/local/bin/igloo-provisioner
+CMD ["igloo-provisioner"]

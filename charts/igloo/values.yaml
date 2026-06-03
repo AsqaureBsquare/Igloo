@@ -1,7 +1,7 @@
 # ─── Server (control plane) ───────────────────────────────────────────────────
 server:
   image:
-    repository: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-server
+    repository: ghcr.io/asquarebsquare/igloo-server
     tag: latest
     pullPolicy: Always
 
@@ -66,7 +66,7 @@ server:
 # ─── Provisioner (job executor) ───────────────────────────────────────────────
 provisioner:
   image:
-    repository: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-provisioner
+    repository: ghcr.io/asquarebsquare/igloo-provisioner
     tag: latest
     pullPolicy: Always
 

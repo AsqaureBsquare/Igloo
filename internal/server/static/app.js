@@ -40,6 +40,11 @@ const api = (() => {
       list:  ()   => req('GET', `/api/templates`),
       files: (id) => req('GET', `/api/templates/${id}/files`),
     },
+    admin: {
+      listUsers:  ()          => req('GET',    '/api/admin/users'),
+      updateUser: (id, body)  => req('PUT',    `/api/admin/users/${id}`, body),
+      deleteUser: (id)        => req('DELETE', `/api/admin/users/${id}`),
+    },
     workspaceLogs: (id) => fetch('/api/workspaces/' + id + '/logs', {
       headers: { 'Authorization': 'Bearer ' + localStorage.getItem('igloo_token') }
     }).then(r => r.text()),
@@ -180,6 +185,7 @@ const icon = {
   settings:   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
   plus:       `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
   logo:       `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
+  users:      `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
 };
 
 // ─── Renderers ────────────────────────────────────────────────────────────────
@@ -277,6 +283,9 @@ function renderShell() {
         <button class="nav-item ${state.view==='templates'?'active':''}" onclick="app.setView('templates')">
           ${icon.templates} Templates
         </button>
+        ${u?.is_admin ? `<button class="nav-item ${state.view==='users'?'active':''}" onclick="app.setView('users')">
+          ${icon.users} Users
+        </button>` : ''}
         <button class="nav-item ${state.view==='settings'?'active':''}" onclick="app.setView('settings')">
           ${icon.settings} Settings
         </button>
@@ -285,7 +294,10 @@ function renderShell() {
         <div class="user-pill">
           <div class="user-avatar">${initials}</div>
           <div style="overflow:hidden">
-            <div class="user-name">${esc(u?.name || '')}</div>
+            <div class="user-name" style="display:flex;align-items:center;gap:6px">
+              ${esc(u?.name || '')}
+              ${u?.is_admin ? '<span class="admin-badge">Admin</span>' : ''}
+            </div>
             <div class="user-email text-sm text-muted">${esc(u?.email || '')}</div>
           </div>
         </div>
@@ -380,6 +392,46 @@ function renderSettingsView() {
 }
 
 
+// ─── Users view (admin only) ──────────────────────────────────────────────────
+
+async function renderUsersView() {
+  document.getElementById('view-title').textContent = 'Users';
+  document.getElementById('topbar-actions').innerHTML = '';
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+  try {
+    const users = await api.admin.listUsers();
+    el.innerHTML = `
+    <div style="max-width:760px">
+      <table class="users-table">
+        <thead>
+          <tr>
+            <th>Name</th><th>Email</th><th>Role</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${users.map(u => `
+          <tr>
+            <td>${esc(u.name || '—')}</td>
+            <td>${esc(u.email)}</td>
+            <td>${u.is_admin ? '<span class="admin-badge">Admin</span>' : '<span class="text-muted">Member</span>'}</td>
+            <td style="text-align:right;white-space:nowrap">
+              ${u.id !== state.user.id ? `
+                ${u.is_admin
+                  ? `<button class="btn btn-ghost btn-sm" onclick="app.demoteUser('${u.id}')">Remove admin</button>`
+                  : `<button class="btn btn-ghost btn-sm" onclick="app.promoteUser('${u.id}')">Make admin</button>`}
+                <button class="btn btn-danger btn-sm" style="margin-left:6px" onclick="app.deleteUserAdmin('${u.id}','${esc(u.name || u.email)}')">Delete</button>
+              ` : '<span class="text-muted text-sm">you</span>'}
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="text-muted" style="padding:24px">Failed to load users: ${esc(e.message)}</div>`;
+  }
+}
+
 // ─── New workspace modal ──────────────────────────────────────────────────────
 
 let selectedTemplateId = null;
@@ -424,6 +476,32 @@ window.app = {
     if (v === 'workspaces') renderWorkspacesView();
     else if (v === 'templates') renderTemplatesView();
     else if (v === 'settings') renderSettingsView();
+    else if (v === 'users') renderUsersView();
+  },
+
+  async promoteUser(id) {
+    try {
+      await api.admin.updateUser(id, { is_admin: true });
+      toast('User promoted to admin', 'success');
+      renderUsersView();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  async demoteUser(id) {
+    try {
+      await api.admin.updateUser(id, { is_admin: false });
+      toast('Admin access removed', 'success');
+      renderUsersView();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  async deleteUserAdmin(id, name) {
+    if (!confirm(`Delete user "${name}"? This cannot be undone.`)) return;
+    try {
+      await api.admin.deleteUser(id);
+      toast(`User deleted`);
+      renderUsersView();
+    } catch(e) { toast(e.message, 'error'); }
   },
 
   async selectTemplateView(id) {

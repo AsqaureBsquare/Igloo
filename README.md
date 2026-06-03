@@ -194,4 +194,4 @@ go run ./cmd/igloo server --local   # starts server with in-memory store
 
 ## License
 
-Apache 2.0
+GPL-3.0

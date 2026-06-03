@@ -1,0 +1,22 @@
+Igloo has been deployed!
+
+Server URL:
+{{- if .Values.server.ingress.enabled }}
+  https://{{ .Values.server.ingress.host }}
+{{- else }}
+  export POD=$(kubectl get pods -l app.kubernetes.io/name={{ include "igloo.server.fullname" . }} -o jsonpath="{.items[0].metadata.name}")
+  kubectl port-forward $POD 8080:{{ .Values.server.port }}
+  Then open: http://localhost:8080
+{{- end }}
+
+Provisioner status:
+  kubectl get pods -l app.kubernetes.io/name={{ include "igloo.provisioner.fullname" . }}
+  kubectl logs -l app.kubernetes.io/name={{ include "igloo.provisioner.fullname" . }} -f
+
+Required values not set:
+{{- if not .Values.server.jwtSecret }}
+  WARNING: server.jwtSecret is not set — generate with: openssl rand -hex 32
+{{- end }}
+{{- if not .Values.provisioner.psk }}
+  WARNING: provisioner.psk is not set — generate with: openssl rand -hex 32
+{{- end }}

@@ -1,0 +1,11 @@
+apiVersion: v2
+name: igloo
+description: Igloo — serverless dev workspace platform. Workspaces auto-sleep to $0, wake in ~15s.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - devworkspace
+  - remote-dev
+  - terraform
+home: https://github.com/AsqaureBsquare/Igloo

@@ -1,0 +1,113 @@
+# ─── Server (control plane) ───────────────────────────────────────────────────
+server:
+  image:
+    repository: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-server
+    tag: latest
+    pullPolicy: Always
+
+  replicas: 1
+  port: 8080
+
+  # Use in-memory store instead of DynamoDB (useful for local/minikube dev)
+  localMode: false
+
+  # Required — generate with: openssl rand -hex 32
+  jwtSecret: ""
+
+  # AWS region for DynamoDB + CloudWatch
+  aws:
+    region: us-east-1
+
+  # DynamoDB table names (must match what terraform created)
+  dynamo:
+    usersTable:      igloo-users
+    workspacesTable: igloo-workspaces
+    templatesTable:  igloo-templates
+    jobsTable:       igloo-ws-jobs
+
+  # Public URL the server is reachable at (used by workspace agents to dial home)
+  serverURL: ""
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+      # kubernetes.io/ingress.class: nginx
+      # cert-manager.io/cluster-issuer: letsencrypt-prod
+    host: ""
+    tls: []
+    #  - secretName: igloo-tls
+    #    hosts:
+    #      - igloo.example.com
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+      # For IRSA (EKS IAM Roles for Service Accounts):
+      # eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/igloo-server-role
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ─── Provisioner (job executor) ───────────────────────────────────────────────
+provisioner:
+  image:
+    repository: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-provisioner
+    tag: latest
+    pullPolicy: Always
+
+  replicas: 1
+
+  # Number of concurrent Terraform jobs per pod
+  concurrency: 10
+
+  # Required — must match server.provisionerPSK (generate with: openssl rand -hex 32)
+  psk: ""
+
+  aws:
+    region: us-east-1
+
+  # Workspace infrastructure config — passed to Terraform templates as variables
+  workspace:
+    # Container image for workspace tasks
+    image: ""
+    # AWS Fargate config (leave empty if using Kubernetes workspaces)
+    ecsCluster: ""
+    ecsExecutionRoleArn: ""
+    ecsTaskRoleArn: ""
+    ecsSubnets: ""        # comma-separated subnet IDs
+    ecsSecurityGroup: ""
+    tfStateBucket: ""
+
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+      # For IRSA:
+      # eks.amazonaws.com/role-arn: arn:aws:iam::123456789:role/igloo-provisioner-role
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}

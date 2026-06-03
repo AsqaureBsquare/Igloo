@@ -1,0 +1,83 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "igloo.server.fullname" . }}
+  labels:
+    {{- include "igloo.server.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.server.replicas }}
+  selector:
+    matchLabels:
+      {{- include "igloo.server.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "igloo.server.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "igloo.server.serviceAccountName" . }}
+      containers:
+        - name: server
+          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          imagePullPolicy: {{ .Values.server.image.pullPolicy }}
+          command: ["./igloo"]
+          args:
+            - server
+            {{- if .Values.server.localMode }}
+            - --local
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.server.port }}
+              protocol: TCP
+          env:
+            - name: PORT
+              value: {{ .Values.server.port | quote }}
+            - name: AWS_REGION
+              value: {{ .Values.server.aws.region | quote }}
+            - name: IGLOO_SERVER_URL
+              value: {{ .Values.server.serverURL | quote }}
+            - name: IGLOO_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.fullname" . }}-secrets
+                  key: JWT_SECRET
+            - name: IGLOO_PROVISIONER_PSK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.fullname" . }}-secrets
+                  key: IGLOO_PROVISIONER_PSK
+            # DynamoDB table names
+            - name: IGLOO_DYNAMO_USERS_TABLE
+              value: {{ .Values.server.dynamo.usersTable | quote }}
+            - name: IGLOO_DYNAMO_WORKSPACES_TABLE
+              value: {{ .Values.server.dynamo.workspacesTable | quote }}
+            - name: IGLOO_DYNAMO_TEMPLATES_TABLE
+              value: {{ .Values.server.dynamo.templatesTable | quote }}
+            - name: IGLOO_DYNAMO_JOBS_TABLE
+              value: {{ .Values.server.dynamo.jobsTable | quote }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.server.resources | nindent 12 }}
+      {{- with .Values.server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,17 +1,20 @@
-FROM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o igloo ./cmd/igloo
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o igloo ./cmd/igloo
 
 FROM alpine:3.19
 ARG TERRAFORM_VERSION=1.9.8
+ARG TARGETARCH=amd64
 RUN apk add --no-cache ca-certificates tzdata unzip wget && \
-    wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
-    unzip terraform_${TERRAFORM_VERSION}_linux_amd64.zip && \
+    wget -q https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${TARGETARCH}.zip && \
+    unzip terraform_${TERRAFORM_VERSION}_linux_${TARGETARCH}.zip && \
     mv terraform /usr/local/bin/ && \
-    rm terraform_${TERRAFORM_VERSION}_linux_amd64.zip
+    rm terraform_${TERRAFORM_VERSION}_linux_${TARGETARCH}.zip
 WORKDIR /app
 COPY --from=builder /app/igloo .
 COPY templates/ templates/

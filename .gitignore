@@ -13,8 +13,8 @@ __pycache__/
 .venv/
 venv/
 
-# Go
-igloo
+# Go binaries
+/igloo
 igloo-agent
 *.exe
 

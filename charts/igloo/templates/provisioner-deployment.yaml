@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "igloo.provisioner.fullname" . }}
+  labels:
+    {{- include "igloo.provisioner.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.provisioner.replicas }}
+  selector:
+    matchLabels:
+      {{- include "igloo.provisioner.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "igloo.provisioner.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "igloo.provisioner.serviceAccountName" . }}
+      containers:
+        - name: provisioner
+          image: "{{ .Values.provisioner.image.repository }}:{{ .Values.provisioner.image.tag }}"
+          imagePullPolicy: {{ .Values.provisioner.image.pullPolicy }}
+          env:
+            - name: AWS_REGION
+              value: {{ .Values.provisioner.aws.region | quote }}
+            - name: IGLOO_SERVER_URL
+              value: "http://{{ include "igloo.server.fullname" . }}:{{ .Values.server.service.port }}"
+            - name: IGLOO_PROVISIONER_PSK
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.fullname" . }}-secrets
+                  key: IGLOO_PROVISIONER_PSK
+            - name: IGLOO_WORKER_CONCURRENCY
+              value: {{ .Values.provisioner.concurrency | quote }}
+            # Workspace Fargate infrastructure variables
+            - name: IGLOO_WORKSPACE_IMAGE
+              value: {{ .Values.provisioner.workspace.image | quote }}
+            - name: IGLOO_ECS_CLUSTER
+              value: {{ .Values.provisioner.workspace.ecsCluster | quote }}
+            - name: IGLOO_ECS_EXECUTION_ROLE_ARN
+              value: {{ .Values.provisioner.workspace.ecsExecutionRoleArn | quote }}
+            - name: IGLOO_ECS_TASK_ROLE_ARN
+              value: {{ .Values.provisioner.workspace.ecsTaskRoleArn | quote }}
+            - name: IGLOO_ECS_SUBNETS
+              value: {{ .Values.provisioner.workspace.ecsSubnets | quote }}
+            - name: IGLOO_ECS_SG
+              value: {{ .Values.provisioner.workspace.ecsSecurityGroup | quote }}
+            - name: IGLOO_TF_STATE_BUCKET
+              value: {{ .Values.provisioner.workspace.tfStateBucket | quote }}
+          resources:
+            {{- toYaml .Values.provisioner.resources | nindent 12 }}
+      {{- with .Values.provisioner.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.provisioner.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.provisioner.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

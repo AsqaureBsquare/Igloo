@@ -73,7 +73,8 @@ resource "aws_iam_role_policy" "server" {
           "ecs:DeleteService",
           "ecs:DescribeServices",
           "ecs:ListServices",
-          "ecs:DescribeClusters"
+          "ecs:DescribeClusters",
+          "ecs:TagResource"
         ]
         Resource = "*"
       },

@@ -40,6 +40,8 @@ resource "aws_ecs_task_definition" "server" {
       { name = "IGLOO_ECS_SG",               value = aws_security_group.workspace.id },
       { name = "IGLOO_WORKSPACE_IMAGE",       value = var.workspace_image },
       { name = "IGLOO_TF_STATE_BUCKET",       value = aws_s3_bucket.tf_state.id },
+      { name = "IGLOO_SERVER_URL",            value = "http://${aws_lb.main.dns_name}" },
+      { name = "IGLOO_PROVISIONER_PSK",       value = var.provisioner_psk },
     ]
 
     logConfiguration = {

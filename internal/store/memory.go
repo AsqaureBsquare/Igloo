@@ -20,6 +20,7 @@ type MemoryStore struct {
 	byEmail    map[string]string            // email → id
 	workspaces map[string]*models.Workspace // id → workspace
 	templates  map[string]*models.Template  // id → template
+	jobs       map[string]*models.ProvisionJob
 }
 
 func NewMemory() *MemoryStore {
@@ -28,6 +29,7 @@ func NewMemory() *MemoryStore {
 		byEmail:    make(map[string]string),
 		workspaces: make(map[string]*models.Workspace),
 		templates:  make(map[string]*models.Template),
+		jobs:       make(map[string]*models.ProvisionJob),
 	}
 }
 
@@ -194,4 +196,98 @@ func (s *MemoryStore) ListTemplates(_ context.Context) ([]*models.Template, erro
 		out = append(out, &cp)
 	}
 	return out, nil
+}
+
+// ─── Jobs ─────────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateJob(_ context.Context, j *models.ProvisionJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *j
+	s.jobs[j.ID] = &cp
+	return nil
+}
+
+func (s *MemoryStore) GetJob(_ context.Context, id string) (*models.ProvisionJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	j, ok := s.jobs[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *j
+	return &cp, nil
+}
+
+func (s *MemoryStore) ClaimNextJob(_ context.Context, provisionerID string) (*models.ProvisionJob, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var oldest *models.ProvisionJob
+	for _, j := range s.jobs {
+		if j.Status != models.JobPending {
+			continue
+		}
+		if oldest == nil || j.CreatedAt.Before(oldest.CreatedAt) {
+			oldest = j
+		}
+	}
+	if oldest == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	oldest.Status = models.JobRunning
+	oldest.UpdatedAt = now
+	oldest.ProvisionerID = provisionerID
+	oldest.Heartbeat = now
+	cp := *oldest
+	return &cp, nil
+}
+
+func (s *MemoryStore) UpdateJobHeartbeat(_ context.Context, jobID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.jobs[jobID]
+	if !ok {
+		return ErrNotFound
+	}
+	j.Heartbeat = time.Now()
+	return nil
+}
+
+func (s *MemoryStore) UpdateJob(_ context.Context, j *models.ProvisionJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j.UpdatedAt = time.Now()
+	cp := *j
+	s.jobs[j.ID] = &cp
+	return nil
+}
+
+func (s *MemoryStore) ListStaleJobs(_ context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cutoff := time.Now().Add(-olderThan)
+	var stale []*models.ProvisionJob
+	for _, j := range s.jobs {
+		if j.Status == models.JobRunning && j.UpdatedAt.Before(cutoff) {
+			cp := *j
+			stale = append(stale, &cp)
+		}
+	}
+	return stale, nil
+}
+
+func (s *MemoryStore) ListStaleDaemonJobs(_ context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	cutoff := time.Now().Add(-olderThan)
+	var stale []*models.ProvisionJob
+	for _, j := range s.jobs {
+		if j.Status == models.JobRunning && !j.Heartbeat.IsZero() &&
+			j.ProvisionerID != "embedded" && j.Heartbeat.Before(cutoff) {
+			cp := *j
+			stale = append(stale, &cp)
+		}
+	}
+	return stale, nil
 }

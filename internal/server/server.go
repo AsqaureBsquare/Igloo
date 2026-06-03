@@ -30,9 +30,11 @@ type Server struct {
 
 func New(st store.Store, a *auth.Auth) *Server {
 	h := &api.Handler{
-		Store: st,
-		Auth:  a,
-		Relay: relay.New(),
+		Store:          st,
+		Auth:           a,
+		Relay:          relay.New(),
+		ProvisionerPSK: os.Getenv("IGLOO_PROVISIONER_PSK"),
+		Registry:       api.NewProvisionerRegistry(),
 	}
 
 	r := chi.NewRouter()
@@ -81,6 +83,22 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Delete("/api/admin/users/{id}", h.AdminDeleteUser)
 		})
 	})
+
+	// ─── Provisioner daemon API (PSK-protected) ──────────────────────────────
+	if h.ProvisionerPSK != "" {
+		// WebSocket endpoint — auth via ?psk= query param (PSK in URL is fine for
+		// server-to-server; the PSK is already in both container envs).
+		r.Get("/api/provisioner/ws", h.ProvisionerWS)
+
+		// HTTP fallback endpoints (backward compat / manual debugging)
+		r.Group(func(r chi.Router) {
+			r.Use(h.ProvisionerAuth)
+			r.Post("/api/provisioner/claim", h.ClaimJob)
+			r.Post("/api/provisioner/jobs/{id}/ping", h.JobPing)
+			r.Post("/api/provisioner/jobs/{id}/done", h.JobDone)
+			r.Post("/api/provisioner/jobs/{id}/fail", h.JobFail)
+		})
+	}
 
 	// SSH / TCP port-forward — token auth via ?token= query param
 	r.Get("/api/workspaces/{id}/forward", h.Forward)
@@ -208,6 +226,46 @@ func loadTemplateFiles(name string) map[string]string {
 		}
 	}
 	return files
+}
+
+func (s *Server) StartWorker(ctx context.Context) {
+	if s.handler.ProvisionerPSK != "" {
+		// External provisioner daemon handles jobs; server only watches for dead daemons.
+		go s.runHeartbeatWatcher(ctx)
+		log.Printf("[server] provisioner daemon mode: heartbeat watcher started")
+		return
+	}
+	s.handler.StartWorker(ctx)
+}
+
+// runHeartbeatWatcher re-queues daemon jobs that stop sending pings (daemon crashed).
+func (s *Server) runHeartbeatWatcher(ctx context.Context) {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			stale, err := s.handler.Store.ListStaleDaemonJobs(ctx, 5*time.Minute)
+			if err != nil {
+				log.Printf("[heartbeat-watcher] list error: %v", err)
+				continue
+			}
+			for _, job := range stale {
+				if job.RetryCount >= models.JobMaxRetries {
+					job.Status = models.JobFailed
+					job.Error = "provisioner daemon lost contact"
+				} else {
+					job.RetryCount++
+					job.Status = models.JobPending
+					log.Printf("[heartbeat-watcher] re-queuing job %s (daemon silent, retry %d)", job.ID, job.RetryCount)
+				}
+				job.UpdatedAt = time.Now()
+				_ = s.handler.Store.UpdateJob(ctx, job)
+			}
+		}
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

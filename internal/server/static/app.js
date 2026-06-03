@@ -218,6 +218,7 @@ function timeAgo(iso) {
 }
 
 function renderWorkspaceCard(ws) {
+  const isDeleting = ws.status === 'deleting';
   const canConnect = ws.status === 'running';
   const canStart   = ws.status === 'sleeping' || ws.status === 'error';
   const canStop    = ws.status === 'running' || ws.status === 'creating';
@@ -241,7 +242,7 @@ function renderWorkspaceCard(ws) {
       ${canStart   ? `<button class="btn btn-ghost" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
       ${canStop    ? `<button class="btn btn-ghost" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
       ${renderWorkspaceCardLogs(ws)}
-      <button class="btn btn-icon btn-danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">🗑</button>
+      ${isDeleting ? '' : `<button class="btn btn-icon btn-danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">🗑</button>`}
     </div>
   </div>`;
 }

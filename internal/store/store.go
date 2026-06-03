@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/igloo-dev/igloo/internal/models"
 )
@@ -26,4 +27,18 @@ type Store interface {
 	UpsertTemplate(ctx context.Context, t *models.Template) error
 	GetTemplate(ctx context.Context, id string) (*models.Template, error)
 	ListTemplates(ctx context.Context) ([]*models.Template, error)
+
+	// Jobs
+	CreateJob(ctx context.Context, j *models.ProvisionJob) error
+	GetJob(ctx context.Context, id string) (*models.ProvisionJob, error)
+	// ClaimNextJob atomically claims the oldest pending job, setting provisionerID on the record.
+	// Returns nil, nil when no pending jobs exist.
+	ClaimNextJob(ctx context.Context, provisionerID string) (*models.ProvisionJob, error)
+	UpdateJob(ctx context.Context, j *models.ProvisionJob) error
+	// UpdateJobHeartbeat records a keepalive from a provisioner daemon.
+	UpdateJobHeartbeat(ctx context.Context, jobID string) error
+	// ListStaleJobs returns running jobs whose UpdatedAt is older than olderThan (catches embedded worker stalls).
+	ListStaleJobs(ctx context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error)
+	// ListStaleDaemonJobs returns running daemon-claimed jobs whose Heartbeat is older than olderThan.
+	ListStaleDaemonJobs(ctx context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error)
 }

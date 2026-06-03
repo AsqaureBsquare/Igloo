@@ -8,8 +8,42 @@ const (
 	StatusCreating WorkspaceStatus = "creating"
 	StatusRunning  WorkspaceStatus = "running"
 	StatusSleeping WorkspaceStatus = "sleeping"
+	StatusDeleting WorkspaceStatus = "deleting"
 	StatusError    WorkspaceStatus = "error"
 )
+
+type JobAction string
+
+const (
+	JobStart   JobAction = "start"
+	JobStop    JobAction = "stop"
+	JobDestroy JobAction = "destroy"
+)
+
+type JobStatus string
+
+const (
+	JobPending JobStatus = "pending"
+	JobRunning JobStatus = "running"
+	JobDone    JobStatus = "done"
+	JobFailed  JobStatus = "failed"
+)
+
+const JobMaxRetries = 3
+
+type ProvisionJob struct {
+	ID            string    `json:"id"`
+	WorkspaceID   string    `json:"workspace_id"`
+	Action        JobAction `json:"action"`
+	Status        JobStatus `json:"status"`
+	Error         string    `json:"error,omitempty"`
+	RetryCount    int       `json:"retry_count"`
+	ProvisionerID string    `json:"provisioner_id,omitempty"` // "embedded" or daemon UUID
+	Heartbeat     time.Time `json:"heartbeat,omitempty"`      // last ping from daemon
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	TTL           int64     `json:"-"`
+}
 
 type Workspace struct {
 	ID           string            `json:"id"`

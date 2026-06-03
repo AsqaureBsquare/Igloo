@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/igloo-dev/igloo/internal/models"
-	"github.com/igloo-dev/igloo/internal/provisioner"
+	"github.com/igloo-dev/igloo/internal/worker"
 )
 
 var upgrader = websocket.Upgrader{
@@ -111,8 +111,12 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	if ws.Status == models.StatusRunning {
+	if ws.Status == models.StatusRunning || ws.Status == models.StatusCreating {
 		h.json(w, http.StatusOK, ws)
+		return
+	}
+	if ws.Status == models.StatusDeleting {
+		h.err(w, http.StatusConflict, "workspace is being deleted")
 		return
 	}
 
@@ -129,14 +133,21 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sshKey := ""
-	if user, err := h.Store.GetUser(r.Context(), ws.UserID); err == nil {
-		sshKey = user.SSHPublicKey
+	if ws.Provider == "aws-fargate" {
+		if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobStart); err != nil {
+			log.Printf("[workspace] failed to enqueue start job workspace=%s: %v", ws.ID, err)
+		} else {
+			h.TryImmediateDispatch(r.Context())
+		}
+	} else {
+		sshKey := ""
+		if user, err := h.Store.GetUser(r.Context(), ws.UserID); err == nil {
+			sshKey = user.SSHPublicKey
+		}
+		tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
+		serverURL := serverURLFromRequest(r)
+		go h.launchWorkspace(ws, tmpl, serverURL, sshKey)
 	}
-
-	tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
-	serverURL := serverURLFromRequest(r)
-	go h.launchWorkspace(ws, tmpl, serverURL, sshKey)
 
 	h.json(w, http.StatusOK, ws)
 }
@@ -148,8 +159,22 @@ func (h *Handler) StopWorkspace(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
-	go h.stopWorkspace(ws, tmpl)
+	if ws.Status == models.StatusDeleting {
+		h.err(w, http.StatusConflict, "workspace is being deleted")
+		return
+	}
+
+	if ws.Provider == "aws-fargate" {
+		if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobStop); err != nil {
+			log.Printf("[workspace] failed to enqueue stop job workspace=%s: %v", ws.ID, err)
+		} else {
+			h.TryImmediateDispatch(r.Context())
+		}
+	} else {
+		tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
+		go h.stopWorkspace(ws, tmpl)
+	}
+
 	ws.Status = models.StatusSleeping
 	ws.UpdatedAt = time.Now()
 	_ = h.Store.UpdateWorkspace(r.Context(), ws)
@@ -163,9 +188,25 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
-	go h.destroyWorkspace(ws, tmpl)
-	_ = h.Store.DeleteWorkspace(r.Context(), ws.ID)
+	if ws.Status == models.StatusDeleting {
+		w.WriteHeader(http.StatusNoContent) // already in progress
+		return
+	}
+
+	if ws.Provider == "aws-fargate" {
+		ws.Status = models.StatusDeleting
+		ws.UpdatedAt = time.Now()
+		_ = h.Store.UpdateWorkspace(r.Context(), ws)
+		if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobDestroy); err != nil {
+			log.Printf("[workspace] failed to enqueue destroy job workspace=%s: %v", ws.ID, err)
+		} else {
+			h.TryImmediateDispatch(r.Context())
+		}
+	} else {
+		tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
+		go h.destroyWorkspace(ws, tmpl)
+		_ = h.Store.DeleteWorkspace(r.Context(), ws.ID)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -256,10 +297,13 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 	switch claims.Role {
 	case "agent":
 		if cur, e := h.Store.GetWorkspace(ctx, claims.WorkspaceID); e == nil {
-			cur.Status = models.StatusRunning
-			cur.UpdatedAt = time.Now()
-			cur.LastActiveAt = time.Now()
-			_ = h.Store.UpdateWorkspace(ctx, cur)
+			// Don't overwrite deleting status — agent may still be alive during terraform destroy
+			if cur.Status != models.StatusDeleting {
+				cur.Status = models.StatusRunning
+				cur.UpdatedAt = time.Now()
+				cur.LastActiveAt = time.Now()
+				_ = h.Store.UpdateWorkspace(ctx, cur)
+			}
 		}
 		h.Relay.RegisterAgent(claims.WorkspaceID, connID, conn)
 		if cur, e := h.Store.GetWorkspace(ctx, claims.WorkspaceID); e == nil && cur.Status == models.StatusRunning {
@@ -285,8 +329,6 @@ func (h *Handler) launchWorkspace(ws *models.Workspace, tmpl *models.Template, s
 		err = h.launchDocker(ws, serverURL)
 	case "docker-terraform":
 		err = h.launchTerraform(ws, serverURL, "docker")
-	case "aws-fargate":
-		err = h.launchFargate(ws, tmpl, serverURL, sshKey)
 	default:
 		err = fmt.Errorf("unsupported provider: %s", ws.Provider)
 	}
@@ -310,8 +352,6 @@ func (h *Handler) stopWorkspace(ws *models.Workspace, tmpl *models.Template) {
 		if dir := ws.Meta["tf_dir"]; dir != "" {
 			h.terraformDestroy(dir)
 		}
-	case "aws-fargate":
-		h.sleepFargate(ws, tmpl)
 	}
 }
 
@@ -325,185 +365,7 @@ func (h *Handler) destroyWorkspace(ws *models.Workspace, tmpl *models.Template) 
 		if dir := ws.Meta["tf_dir"]; dir != "" {
 			h.terraformDestroy(dir)
 		}
-	case "aws-fargate":
-		if tmpl != nil {
-			h.destroyFargate(ws, tmpl)
-		}
 	}
-}
-
-// ─── Fargate (pure Terraform) ─────────────────────────────────────────────────
-
-func (h *Handler) launchFargate(ws *models.Workspace, tmpl *models.Template, serverURL, sshKey string) error {
-	if tmpl == nil {
-		return fmt.Errorf("template not found")
-	}
-	logPath := h.provisionLogPath(ws.ID)
-	if cur, e := h.Store.GetWorkspace(context.Background(), ws.ID); e == nil {
-		cur.Meta["log_path"] = logPath
-		_ = h.Store.UpdateWorkspace(context.Background(), cur)
-	}
-
-	files := tmpl.Files
-	if len(files) == 0 {
-		files = loadFilesFromDisk("aws-fargate")
-	}
-	if len(files) == 0 {
-		return fmt.Errorf("no terraform files for aws-fargate template")
-	}
-
-	bucket := os.Getenv("IGLOO_TF_STATE_BUCKET")
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-	if bucket == "" {
-		return fmt.Errorf("IGLOO_TF_STATE_BUCKET not set")
-	}
-
-	vars := h.buildFargateVars(ws, serverURL, sshKey)
-	vars["desired_count"] = "1"
-
-	outputs, err := provisioner.Run(context.Background(), provisioner.Input{
-		WorkspaceID: ws.ID,
-		Files:       files,
-		Vars:        vars,
-		StateBucket: bucket,
-		StateRegion: region,
-		LogPath:     logPath,
-	}, provisioner.ActionApply)
-	if err != nil {
-		return fmt.Errorf("terraform apply: %w", err)
-	}
-
-	if cur, e := h.Store.GetWorkspace(context.Background(), ws.ID); e == nil {
-		if svc := outputs["service_name"]; svc != "" {
-			cur.Meta["service_name"] = svc
-		}
-		_ = h.Store.UpdateWorkspace(context.Background(), cur)
-	}
-
-	return nil
-}
-
-func (h *Handler) sleepFargate(ws *models.Workspace, tmpl *models.Template) {
-	if tmpl == nil {
-		return
-	}
-	files := tmpl.Files
-	if len(files) == 0 {
-		files = loadFilesFromDisk("aws-fargate")
-	}
-	if len(files) == 0 {
-		log.Printf("[fargate] no files to sleep workspace %s", ws.ID)
-		return
-	}
-
-	bucket := os.Getenv("IGLOO_TF_STATE_BUCKET")
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-	logPath := h.provisionLogPath(ws.ID)
-	vars := h.buildFargateVars(ws, "", "")
-	vars["desired_count"] = "0"
-
-	if _, err := provisioner.Run(context.Background(), provisioner.Input{
-		WorkspaceID: ws.ID,
-		Files:       files,
-		Vars:        vars,
-		StateBucket: bucket,
-		StateRegion: region,
-		LogPath:     logPath,
-	}, provisioner.ActionApply); err != nil {
-		log.Printf("[fargate] sleep failed workspace=%s: %v", ws.ID, err)
-	}
-}
-
-func (h *Handler) destroyFargate(ws *models.Workspace, tmpl *models.Template) {
-	files := tmpl.Files
-	if len(files) == 0 {
-		files = loadFilesFromDisk("aws-fargate")
-	}
-	if len(files) == 0 {
-		log.Printf("[fargate] no files to run terraform destroy for workspace %s", ws.ID)
-		return
-	}
-
-	sshKey := ""
-	if user, err := h.Store.GetUser(context.Background(), ws.UserID); err == nil {
-		sshKey = user.SSHPublicKey
-	}
-
-	bucket := os.Getenv("IGLOO_TF_STATE_BUCKET")
-	region := os.Getenv("AWS_REGION")
-	if region == "" {
-		region = "us-east-1"
-	}
-	logPath := h.provisionLogPath(ws.ID)
-	vars := h.buildFargateVars(ws, "", sshKey)
-	vars["desired_count"] = "0"
-
-	if _, err := provisioner.Run(context.Background(), provisioner.Input{
-		WorkspaceID: ws.ID,
-		Files:       files,
-		Vars:        vars,
-		StateBucket: bucket,
-		StateRegion: region,
-		LogPath:     logPath,
-	}, provisioner.ActionDestroy); err != nil {
-		log.Printf("[fargate] terraform destroy failed workspace=%s: %v", ws.ID, err)
-	}
-}
-
-func (h *Handler) buildFargateVars(ws *models.Workspace, serverURL, sshKey string) map[string]string {
-	vars := make(map[string]string)
-	for k, v := range ws.Vars {
-		vars[k] = v
-	}
-	vars["workspace_id"] = ws.ID
-	vars["workspace_name"] = ws.Name
-	vars["server_url"] = serverURL
-	vars["agent_token"] = ws.AgentToken
-	vars["ssh_public_key"] = sshKey
-	vars["cluster_name"] = os.Getenv("IGLOO_ECS_CLUSTER")
-	vars["task_execution_role_arn"] = os.Getenv("IGLOO_ECS_EXECUTION_ROLE_ARN")
-	vars["task_role_arn"] = os.Getenv("IGLOO_ECS_TASK_ROLE_ARN")
-	vars["subnet_ids"] = os.Getenv("IGLOO_ECS_SUBNETS")
-	vars["security_group_id"] = os.Getenv("IGLOO_ECS_SG")
-	vars["workspace_image"] = os.Getenv("IGLOO_WORKSPACE_IMAGE")
-	if vars["region"] == "" {
-		if r := os.Getenv("AWS_REGION"); r != "" {
-			vars["region"] = r
-		} else {
-			vars["region"] = "us-east-1"
-		}
-	}
-	return vars
-}
-
-func (h *Handler) provisionLogPath(workspaceID string) string {
-	dir := filepath.Join(os.TempDir(), "igloo-logs")
-	_ = os.MkdirAll(dir, 0755)
-	return filepath.Join(dir, workspaceID+".log")
-}
-
-func loadFilesFromDisk(name string) map[string]string {
-	srcDir, _ := filepath.Abs(filepath.Join("templates", name))
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return nil
-	}
-	files := map[string]string{}
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) == "" {
-			continue
-		}
-		if data, err := os.ReadFile(filepath.Join(srcDir, e.Name())); err == nil {
-			files[e.Name()] = string(data)
-		}
-	}
-	return files
 }
 
 // ─── Docker launch ────────────────────────────────────────────────────────────

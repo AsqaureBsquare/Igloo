@@ -2,12 +2,32 @@ package api
 
 import (
 	"net/http"
+	"path/filepath"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/igloo-dev/igloo/internal/models"
 )
+
+func loadFilesFromDisk(name string) map[string]string {
+	srcDir, _ := filepath.Abs(filepath.Join("templates", name))
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return nil
+	}
+	files := map[string]string{}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) == "" {
+			continue
+		}
+		if data, err := os.ReadFile(filepath.Join(srcDir, e.Name())); err == nil {
+			files[e.Name()] = string(data)
+		}
+	}
+	return files
+}
 
 // GET /api/templates
 func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {

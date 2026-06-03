@@ -18,6 +18,7 @@ type DynamoStore struct {
 	users      string
 	workspaces string
 	templates  string
+	jobs       string
 }
 
 func NewDynamoStore(ctx context.Context, region string) (*DynamoStore, error) {
@@ -30,6 +31,7 @@ func NewDynamoStore(ctx context.Context, region string) (*DynamoStore, error) {
 		users:      "igloo-users",
 		workspaces: "igloo-workspaces",
 		templates:  "igloo-templates",
+		jobs:       "igloo-ws-jobs",
 	}, nil
 }
 
@@ -91,12 +93,20 @@ func wsToItem(ws *models.Workspace) workspaceItem {
 	}
 }
 func itemToWS(i workspaceItem) *models.Workspace {
+	meta := i.Meta
+	if meta == nil {
+		meta = make(map[string]string)
+	}
+	vars := i.Vars
+	if vars == nil {
+		vars = make(map[string]string)
+	}
 	return &models.Workspace{
 		ID: i.ID, UserID: i.UserID, Name: i.Name,
 		TemplateID: i.TemplateID, TemplateName: i.TemplateName,
 		Provider: i.Provider, Status: models.WorkspaceStatus(i.Status), AgentToken: i.AgentToken,
 		CostPerHr: i.CostPerHr, CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt,
-		LastActiveAt: i.LastActiveAt, Vars: i.Vars, Meta: i.Meta,
+		LastActiveAt: i.LastActiveAt, Vars: vars, Meta: meta,
 	}
 }
 
@@ -324,4 +334,208 @@ func strKey(name, value string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{
 		name: &types.AttributeValueMemberS{Value: value},
 	}
+}
+
+// ─── Jobs ─────────────────────────────────────────────────────────────────────
+
+type jobItem struct {
+	ID            string    `dynamodbav:"id"`
+	WorkspaceID   string    `dynamodbav:"workspace_id"`
+	Action        string    `dynamodbav:"action"`
+	Status        string    `dynamodbav:"status"`
+	Error         string    `dynamodbav:"error"`
+	RetryCount    int       `dynamodbav:"retry_count"`
+	ProvisionerID string    `dynamodbav:"provisioner_id"`
+	Heartbeat     time.Time `dynamodbav:"heartbeat"`
+	CreatedAt     time.Time `dynamodbav:"created_at"`
+	UpdatedAt     time.Time `dynamodbav:"updated_at"`
+	TTL           int64     `dynamodbav:"ttl"`
+}
+
+func jobToItem(j *models.ProvisionJob) jobItem {
+	return jobItem{
+		ID: j.ID, WorkspaceID: j.WorkspaceID,
+		Action: string(j.Action), Status: string(j.Status),
+		Error: j.Error, RetryCount: j.RetryCount,
+		ProvisionerID: j.ProvisionerID, Heartbeat: j.Heartbeat,
+		CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, TTL: j.TTL,
+	}
+}
+
+func itemToJob(i jobItem) *models.ProvisionJob {
+	return &models.ProvisionJob{
+		ID: i.ID, WorkspaceID: i.WorkspaceID,
+		Action: models.JobAction(i.Action), Status: models.JobStatus(i.Status),
+		Error: i.Error, RetryCount: i.RetryCount,
+		ProvisionerID: i.ProvisionerID, Heartbeat: i.Heartbeat,
+		CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, TTL: i.TTL,
+	}
+}
+
+func (d *DynamoStore) CreateJob(ctx context.Context, j *models.ProvisionJob) error {
+	item, err := attributevalue.MarshalMap(jobToItem(j))
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: &d.jobs,
+		Item:      item,
+	})
+	return err
+}
+
+func (d *DynamoStore) GetJob(ctx context.Context, id string) (*models.ProvisionJob, error) {
+	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &d.jobs,
+		Key:       strKey("id", id),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var i jobItem
+	if err := attributevalue.UnmarshalMap(out.Item, &i); err != nil {
+		return nil, err
+	}
+	return itemToJob(i), nil
+}
+
+func (d *DynamoStore) ClaimNextJob(ctx context.Context, provisionerID string) (*models.ProvisionJob, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.jobs,
+		IndexName:              aws.String("status-created_at-index"),
+		KeyConditionExpression: aws.String("#s = :pending"),
+		ExpressionAttributeNames:  map[string]string{"#s": "status"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pending": &types.AttributeValueMemberS{Value: "pending"},
+		},
+		ScanIndexForward: aws.Bool(true),
+		Limit:            aws.Int32(5),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	nowVal, _ := attributevalue.Marshal(now)
+	pidVal := &types.AttributeValueMemberS{Value: provisionerID}
+	for _, rawItem := range out.Items {
+		var i jobItem
+		if err := attributevalue.UnmarshalMap(rawItem, &i); err != nil {
+			continue
+		}
+		_, err = d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+			TableName:           &d.jobs,
+			Key:                 strKey("id", i.ID),
+			UpdateExpression:    aws.String("SET #s = :running, updated_at = :now, provisioner_id = :pid, heartbeat = :now"),
+			ConditionExpression: aws.String("#s = :pending"),
+			ExpressionAttributeNames: map[string]string{"#s": "status"},
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":running": &types.AttributeValueMemberS{Value: "running"},
+				":pending": &types.AttributeValueMemberS{Value: "pending"},
+				":now":     nowVal,
+				":pid":     pidVal,
+			},
+		})
+		if err != nil {
+			var cce *types.ConditionalCheckFailedException
+			if errors.As(err, &cce) {
+				continue
+			}
+			return nil, err
+		}
+		job := itemToJob(i)
+		job.Status = models.JobRunning
+		job.UpdatedAt = now
+		job.ProvisionerID = provisionerID
+		job.Heartbeat = now
+		return job, nil
+	}
+	return nil, nil
+}
+
+func (d *DynamoStore) UpdateJobHeartbeat(ctx context.Context, jobID string) error {
+	now := time.Now()
+	nowVal, _ := attributevalue.Marshal(now)
+	_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:        &d.jobs,
+		Key:              strKey("id", jobID),
+		UpdateExpression: aws.String("SET heartbeat = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":now": nowVal,
+		},
+	})
+	return err
+}
+
+func (d *DynamoStore) UpdateJob(ctx context.Context, j *models.ProvisionJob) error {
+	j.UpdatedAt = time.Now()
+	item, err := attributevalue.MarshalMap(jobToItem(j))
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: &d.jobs,
+		Item:      item,
+	})
+	return err
+}
+
+func (d *DynamoStore) ListStaleJobs(ctx context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.jobs,
+		IndexName:              aws.String("status-created_at-index"),
+		KeyConditionExpression: aws.String("#s = :running"),
+		ExpressionAttributeNames:  map[string]string{"#s": "status"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":running": &types.AttributeValueMemberS{Value: "running"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cutoff := time.Now().Add(-olderThan)
+	var stale []*models.ProvisionJob
+	for _, rawItem := range out.Items {
+		var i jobItem
+		if err := attributevalue.UnmarshalMap(rawItem, &i); err != nil {
+			continue
+		}
+		if i.UpdatedAt.Before(cutoff) {
+			stale = append(stale, itemToJob(i))
+		}
+	}
+	return stale, nil
+}
+
+func (d *DynamoStore) ListStaleDaemonJobs(ctx context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.jobs,
+		IndexName:              aws.String("status-created_at-index"),
+		KeyConditionExpression: aws.String("#s = :running"),
+		ExpressionAttributeNames:  map[string]string{"#s": "status"},
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":running": &types.AttributeValueMemberS{Value: "running"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	cutoff := time.Now().Add(-olderThan)
+	var stale []*models.ProvisionJob
+	for _, rawItem := range out.Items {
+		var i jobItem
+		if err := attributevalue.UnmarshalMap(rawItem, &i); err != nil {
+			continue
+		}
+		// Only daemon-claimed jobs have a non-zero Heartbeat
+		if !i.Heartbeat.IsZero() && i.ProvisionerID != "embedded" && i.Heartbeat.Before(cutoff) {
+			stale = append(stale, itemToJob(i))
+		}
+	}
+	return stale, nil
 }

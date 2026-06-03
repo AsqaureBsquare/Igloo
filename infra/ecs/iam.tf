@@ -42,7 +42,7 @@ resource "aws_iam_role_policy" "server" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      # DynamoDB — users, workspaces, templates
+      # DynamoDB — users, workspaces, templates, jobs
       {
         Effect = "Allow"
         Action = [
@@ -59,6 +59,8 @@ resource "aws_iam_role_policy" "server" {
           aws_dynamodb_table.workspaces.arn,
           "${aws_dynamodb_table.workspaces.arn}/index/*",
           aws_dynamodb_table.templates.arn,
+          aws_dynamodb_table.jobs.arn,
+          "${aws_dynamodb_table.jobs.arn}/index/*",
         ]
       },
       # ECS — Terraform creates/updates/destroys per-workspace services

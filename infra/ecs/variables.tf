@@ -21,3 +21,9 @@ variable "jwt_secret" {
   type        = string
   sensitive   = true
 }
+
+variable "provisioner_psk" {
+  description = "Pre-shared key for provisioner daemon → server authentication"
+  type        = string
+  sensitive   = true
+}

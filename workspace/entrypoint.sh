@@ -23,22 +23,32 @@ if [ -n "${IGLOO_SSH_KEY:-}" ]; then
     echo "${IGLOO_SSH_KEY}" > "$WORKSPACE/.ssh/authorized_keys"
     chmod 600 "$WORKSPACE/.ssh/authorized_keys"
     echo "[igloo] SSH public key installed."
+else
+    echo "[igloo] WARNING: no SSH key provided — SSH will reject all connections."
 fi
 
-# Start sshd
-/usr/sbin/sshd -f /etc/ssh/igloo_sshd_config
-echo "[igloo] sshd started."
+# /run/sshd may not exist if /run is a tmpfs (common in containers)
+mkdir -p /run/sshd
+
+# Start sshd in foreground mode (-D) as a background process so errors
+# appear in CloudWatch logs instead of dying silently.
+/usr/sbin/sshd -D -e -f /etc/ssh/igloo_sshd_config &
+SSHD_PID=$!
+sleep 0.5
+if kill -0 $SSHD_PID 2>/dev/null; then
+    echo "[igloo] sshd started (pid=$SSHD_PID)."
+else
+    echo "[igloo] ERROR: sshd failed to start — SSH will not work."
+fi
 
 echo "[igloo] Workspace ready."
 
 # Start igloo-agent in the background if the binary is present and configured.
-# The agent dials outbound to API Gateway WebSocket so browsers can open a
-# PTY terminal without any inbound ports on the container.
 if [ -x /usr/local/bin/igloo-agent ] && [ -n "${IGLOO_SERVER_URL:-}" ]; then
     echo "[igloo] Starting igloo-agent..."
     /usr/local/bin/igloo-agent &
 else
-    echo "[igloo] igloo-agent not started (binary absent or IGLOO_WS_URL not set)."
+    echo "[igloo] igloo-agent not started (binary absent or IGLOO_SERVER_URL not set)."
 fi
 
 exec sleep infinity

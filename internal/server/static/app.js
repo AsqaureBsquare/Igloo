@@ -948,7 +948,13 @@ function showAuthErr(msg) {
 
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 async function refreshWorkspaces() {
-  state.workspaces = await api.workspaces.list();
+  const updated = await api.workspaces.list().catch(() => null);
+  if (!updated) return;
+  const map = new Map(updated.map(w => [w.id, w]));
+  state.workspaces = state.workspaces
+    .map(w => map.get(w.id) ?? w)
+    .filter(w => map.has(w.id))
+    .concat(updated.filter(w => !state.workspaces.find(e => e.id === w.id)));
   if (state.view === 'igloos') renderIgloosView();
 }
 
@@ -964,7 +970,12 @@ async function boot() {
   state.poll = setInterval(async () => {
     const updated = await api.workspaces.list().catch(() => null);
     if (!updated) return;
-    state.workspaces = updated;
+    // Merge in-place: update existing entries (preserving order), append new ones.
+    const map = new Map(updated.map(w => [w.id, w]));
+    state.workspaces = state.workspaces
+      .map(w => map.get(w.id) ?? w)           // update existing, keep order
+      .filter(w => map.has(w.id))             // remove deleted
+      .concat(updated.filter(w => !state.workspaces.find(e => e.id === w.id))); // append brand-new
     if (state.view === 'igloos') renderIgloosView();
   }, 5000);
 }

@@ -33,7 +33,7 @@ resource "aws_ecs_task_definition" "provisioner" {
       { name = "IGLOO_WORKSPACE_IMAGE",        value = var.workspace_image },
       { name = "IGLOO_TF_STATE_BUCKET",        value = aws_s3_bucket.tf_state.id },
       { name = "IGLOO_WORKER_CONCURRENCY",     value = "10" },
-      { name = "IGLOO_PROVISIONER_PSK",        value = var.provisioner_psk },
+      { name = "IGLOO_PROVISIONER_KEY",         value = var.provisioner_key },
     ]
 
     logConfiguration = {

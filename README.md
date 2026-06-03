@@ -72,19 +72,19 @@ helm install igloo oci://ghcr.io/asquarebsquare/igloo \
 
 **macOS (Apple Silicon)**
 ```bash
-curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0_darwin_arm64.tar.gz | tar xz
+curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0-beta.1_darwin_arm64.tar.gz | tar xz
 sudo mv igloo /usr/local/bin/
 ```
 
 **macOS (Intel)**
 ```bash
-curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0_darwin_amd64.tar.gz | tar xz
+curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0-beta.1_darwin_amd64.tar.gz | tar xz
 sudo mv igloo /usr/local/bin/
 ```
 
 **Linux**
 ```bash
-curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0_linux_amd64.tar.gz | tar xz
+curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0-beta.1_linux_amd64.tar.gz | tar xz
 sudo mv igloo /usr/local/bin/
 ```
 

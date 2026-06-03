@@ -24,11 +24,11 @@ spec:
               value: {{ .Values.provisioner.aws.region | quote }}
             - name: IGLOO_SERVER_URL
               value: "http://{{ include "igloo.server.fullname" . }}:{{ .Values.server.service.port }}"
-            - name: IGLOO_PROVISIONER_PSK
+            - name: IGLOO_PROVISIONER_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "igloo.fullname" . }}-secrets
-                  key: IGLOO_PROVISIONER_PSK
+                  key: IGLOO_PROVISIONER_KEY
             - name: IGLOO_WORKER_CONCURRENCY
               value: {{ .Values.provisioner.concurrency | quote }}
             # Workspace Fargate infrastructure variables

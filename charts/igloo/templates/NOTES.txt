@@ -17,6 +17,6 @@ Required values not set:
 {{- if not .Values.server.jwtSecret }}
   WARNING: server.jwtSecret is not set — generate with: openssl rand -hex 32
 {{- end }}
-{{- if not .Values.provisioner.psk }}
-  WARNING: provisioner.psk is not set — generate with: openssl rand -hex 32
+{{- if not .Values.provisioner.key }}
+  WARNING: provisioner.key is not set — generate with: openssl rand -hex 32
 {{- end }}

@@ -29,15 +29,15 @@ import (
 // runs up to concurrency Terraform jobs in parallel.
 type Daemon struct {
 	ServerURL string
-	PSK       string
+	Token     string
 	ID        string
 	inFlight  sync.Map // workspace_id → struct{}
 }
 
-func New(serverURL, psk string) *Daemon {
+func New(serverURL, token string) *Daemon {
 	return &Daemon{
 		ServerURL: serverURL,
-		PSK:       psk,
+		Token:     token,
 		ID:        uuid.NewString(),
 	}
 }
@@ -101,7 +101,7 @@ func (d *Daemon) runConnection(ctx context.Context, concurrency int) error {
 	}
 	u.Path = "/api/provisioner/ws"
 	q := u.Query()
-	q.Set("psk", d.PSK)
+	q.Set("token", d.Token)
 	q.Set("id", d.ID)
 	u.RawQuery = q.Encode()
 

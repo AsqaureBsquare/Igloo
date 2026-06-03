@@ -75,8 +75,8 @@ provisioner:
   # Number of concurrent Terraform jobs per pod
   concurrency: 10
 
-  # Required — must match server.provisionerPSK (generate with: openssl rand -hex 32)
-  psk: ""
+  # Required — provisioner key token (generate with: openssl rand -hex 32)
+  key: ""
 
   aws:
     region: us-east-1

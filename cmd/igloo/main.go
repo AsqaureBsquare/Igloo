@@ -348,6 +348,7 @@ func runServer(args []string) {
 
 	srv := server.New(st, a)
 	srv.SeedBuiltinTemplates(ctx)
+	srv.BootstrapProvisionerKey(ctx)
 	srv.StartWorker(ctx)
 
 	addr := ":" + port

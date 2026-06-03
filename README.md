@@ -46,7 +46,7 @@ Provisioner daemons connect **outbound** to the server — deploy them in any pr
 ## Quickstart (Kubernetes / Helm)
 
 ```bash
-helm install igloo oci://ghcr.io/asqaurebsquare/igloo \
+helm install igloo oci://ghcr.io/asquarebsquare/igloo \
   --version 0.1.1 \
   --set server.jwtSecret=$(openssl rand -hex 32) \
   --set provisioner.psk=$(openssl rand -hex 32) \
@@ -59,7 +59,7 @@ helm install igloo oci://ghcr.io/asqaurebsquare/igloo \
 For local testing (no AWS, in-memory store):
 
 ```bash
-helm install igloo oci://ghcr.io/asqaurebsquare/igloo \
+helm install igloo oci://ghcr.io/asquarebsquare/igloo \
   --version 0.1.1 \
   --set server.jwtSecret=$(openssl rand -hex 32) \
   --set provisioner.psk=$(openssl rand -hex 32) \
@@ -135,8 +135,8 @@ Run with `--local` to use an in-memory store (no AWS required).
 ## Docker images
 
 ```bash
-docker pull ghcr.io/asqaurebsquare/igloo-server:latest
-docker pull ghcr.io/asqaurebsquare/igloo-provisioner:latest
+docker pull ghcr.io/asquarebsquare/igloo-server:latest
+docker pull ghcr.io/asquarebsquare/igloo-provisioner:latest
 ```
 
 Images are built for `linux/amd64` and `linux/arm64`.
@@ -194,4 +194,4 @@ go run ./cmd/igloo server --local   # starts server with in-memory store
 
 ## License
 
-GPL-3.0
+Apache 2.0

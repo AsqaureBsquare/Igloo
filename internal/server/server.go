@@ -30,11 +30,10 @@ type Server struct {
 
 func New(st store.Store, a *auth.Auth) *Server {
 	h := &api.Handler{
-		Store:          st,
-		Auth:           a,
-		Relay:          relay.New(),
-		ProvisionerPSK: os.Getenv("IGLOO_PROVISIONER_PSK"),
-		Registry:       api.NewProvisionerRegistry(),
+		Store:    st,
+		Auth:     a,
+		Relay:    relay.New(),
+		Registry: api.NewProvisionerRegistry(),
 	}
 
 	r := chi.NewRouter()
@@ -81,24 +80,22 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Get("/api/admin/users", h.AdminListUsers)
 			r.Put("/api/admin/users/{id}", h.AdminUpdateUser)
 			r.Delete("/api/admin/users/{id}", h.AdminDeleteUser)
+			r.Post("/api/admin/provisioner-keys", h.CreateProvisionerKey)
+			r.Get("/api/admin/provisioner-keys", h.ListProvisionerKeys)
+			r.Delete("/api/admin/provisioner-keys/{id}", h.DeleteProvisionerKey)
 		})
 	})
 
-	// ─── Provisioner daemon API (PSK-protected) ──────────────────────────────
-	if h.ProvisionerPSK != "" {
-		// WebSocket endpoint — auth via ?psk= query param (PSK in URL is fine for
-		// server-to-server; the PSK is already in both container envs).
-		r.Get("/api/provisioner/ws", h.ProvisionerWS)
-
-		// HTTP fallback endpoints (backward compat / manual debugging)
-		r.Group(func(r chi.Router) {
-			r.Use(h.ProvisionerAuth)
-			r.Post("/api/provisioner/claim", h.ClaimJob)
-			r.Post("/api/provisioner/jobs/{id}/ping", h.JobPing)
-			r.Post("/api/provisioner/jobs/{id}/done", h.JobDone)
-			r.Post("/api/provisioner/jobs/{id}/fail", h.JobFail)
-		})
-	}
+	// ─── Provisioner daemon API (key-authenticated) ───────────────────────────
+	// WS: token via ?token= query param; HTTP: Bearer token header
+	r.Get("/api/provisioner/ws", h.ProvisionerWS)
+	r.Group(func(r chi.Router) {
+		r.Use(h.ProvisionerAuth)
+		r.Post("/api/provisioner/claim", h.ClaimJob)
+		r.Post("/api/provisioner/jobs/{id}/ping", h.JobPing)
+		r.Post("/api/provisioner/jobs/{id}/done", h.JobDone)
+		r.Post("/api/provisioner/jobs/{id}/fail", h.JobFail)
+	})
 
 	// SSH / TCP port-forward — token auth via ?token= query param
 	r.Get("/api/workspaces/{id}/forward", h.Forward)
@@ -118,6 +115,31 @@ func New(st store.Store, a *auth.Auth) *Server {
 	r.Handle("/*", spaHandler(uiSub))
 
 	return &Server{handler: h, router: r}
+}
+
+// BootstrapProvisionerKey creates a provisioner key from IGLOO_PROVISIONER_BOOTSTRAP_KEY
+// if set. Safe to call on every startup — silently skips if the key already exists.
+func (s *Server) BootstrapProvisionerKey(ctx context.Context) {
+	raw := os.Getenv("IGLOO_PROVISIONER_BOOTSTRAP_KEY")
+	if raw == "" {
+		return
+	}
+	hash := api.HashToken(raw)
+	if _, err := s.handler.Store.GetProvisionerKeyByTokenHash(ctx, hash); err == nil {
+		return // already registered
+	}
+	k := &models.ProvisionerKey{
+		ID:        "bootstrap",
+		Name:      "bootstrap",
+		TokenHash: hash,
+		CreatedBy: "system",
+		CreatedAt: time.Now(),
+	}
+	if err := s.handler.Store.CreateProvisionerKey(ctx, k); err != nil {
+		log.Printf("[server] bootstrap provisioner key: %v", err)
+		return
+	}
+	log.Printf("[server] bootstrap provisioner key registered")
 }
 
 func (s *Server) SeedBuiltinTemplates(ctx context.Context) {
@@ -229,7 +251,7 @@ func loadTemplateFiles(name string) map[string]string {
 }
 
 func (s *Server) StartWorker(ctx context.Context) {
-	if s.handler.ProvisionerPSK != "" {
+	if os.Getenv("IGLOO_DAEMON_MODE") == "true" {
 		// External provisioner daemon handles jobs; server only watches for dead daemons.
 		go s.runHeartbeatWatcher(ctx)
 		log.Printf("[server] provisioner daemon mode: heartbeat watcher started")

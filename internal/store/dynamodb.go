@@ -539,3 +539,25 @@ func (d *DynamoStore) ListStaleDaemonJobs(ctx context.Context, olderThan time.Du
 	}
 	return stale, nil
 }
+
+// ─── ProvisionerKeys (DynamoDB — TODO: add igloo-provisioner-keys table) ─────
+
+func (d *DynamoStore) CreateProvisionerKey(_ context.Context, _ *models.ProvisionerKey) error {
+	return errors.New("provisioner keys not yet implemented for DynamoDB store")
+}
+
+func (d *DynamoStore) GetProvisionerKeyByTokenHash(_ context.Context, _ string) (*models.ProvisionerKey, error) {
+	return nil, ErrNotFound
+}
+
+func (d *DynamoStore) ListProvisionerKeys(_ context.Context) ([]*models.ProvisionerKey, error) {
+	return nil, nil
+}
+
+func (d *DynamoStore) DeleteProvisionerKey(_ context.Context, _ string) error {
+	return ErrNotFound
+}
+
+func (d *DynamoStore) TouchProvisionerKey(_ context.Context, _ string) error {
+	return nil
+}

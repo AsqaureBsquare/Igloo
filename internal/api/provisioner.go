@@ -30,12 +30,18 @@ type wsMsg struct {
 // ProvisionerWS handles GET /api/provisioner/ws.
 // Each daemon connects once; concurrency is expressed by sending multiple "acquire" messages.
 func (h *Handler) ProvisionerWS(w http.ResponseWriter, r *http.Request) {
-	// Auth via query param (WebSocket headers are restricted in browsers; daemon uses Go client so fine,
-	// but query param is simpler and avoids header quirks in some proxies).
-	if r.URL.Query().Get("psk") != h.ProvisionerPSK {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		h.err(w, http.StatusUnauthorized, "token required")
+		return
+	}
+	key, err := h.Store.GetProvisionerKeyByTokenHash(r.Context(), hashToken(token))
+	if err != nil {
 		h.err(w, http.StatusUnauthorized, "invalid provisioner key")
 		return
 	}
+	_ = h.Store.TouchProvisionerKey(r.Context(), key.ID)
+
 	provisionerID := r.URL.Query().Get("id")
 	if provisionerID == "" {
 		h.err(w, http.StatusBadRequest, "id required")
@@ -152,12 +158,16 @@ func (h *Handler) TryImmediateDispatch(ctx context.Context) {
 	}
 }
 
-// ProvisionerAuth is middleware that validates the provisioner pre-shared key.
+// ProvisionerAuth is middleware that validates a provisioner key token.
 func (h *Handler) ProvisionerAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		token, _ := strings.CutPrefix(auth, "Bearer ")
-		if token == "" || token != h.ProvisionerPSK {
+		authHeader := r.Header.Get("Authorization")
+		token, _ := strings.CutPrefix(authHeader, "Bearer ")
+		if token == "" {
+			h.err(w, http.StatusUnauthorized, "token required")
+			return
+		}
+		if _, err := h.Store.GetProvisionerKeyByTokenHash(r.Context(), hashToken(token)); err != nil {
 			h.err(w, http.StatusUnauthorized, "invalid provisioner key")
 			return
 		}

@@ -2,6 +2,16 @@ package models
 
 import "time"
 
+type ProvisionerKey struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Tags       map[string]string `json:"tags,omitempty"`
+	TokenHash  string            `json:"-"`
+	CreatedBy  string            `json:"created_by"`
+	CreatedAt  time.Time         `json:"created_at"`
+	LastUsedAt *time.Time        `json:"last_used_at,omitempty"`
+}
+
 type WorkspaceStatus string
 
 const (

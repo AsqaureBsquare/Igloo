@@ -41,11 +41,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "igloo.fullname" . }}-secrets
                   key: JWT_SECRET
-            - name: IGLOO_PROVISIONER_PSK
+            - name: IGLOO_DAEMON_MODE
+              value: "true"
+            - name: IGLOO_PROVISIONER_BOOTSTRAP_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "igloo.fullname" . }}-secrets
-                  key: IGLOO_PROVISIONER_PSK
+                  key: IGLOO_PROVISIONER_KEY
             # DynamoDB table names
             - name: IGLOO_DYNAMO_USERS_TABLE
               value: {{ .Values.server.dynamo.usersTable | quote }}

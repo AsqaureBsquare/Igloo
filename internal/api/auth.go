@@ -37,11 +37,16 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// First user to register becomes admin.
+	existing, _ := h.Store.ListUsers(r.Context())
+	isFirst := len(existing) == 0
+
 	user := &models.User{
 		ID:           uuid.NewString(),
 		Email:        strings.ToLower(strings.TrimSpace(body.Email)),
 		Name:         strings.TrimSpace(body.Name),
 		PasswordHash: hash,
+		IsAdmin:      isFirst,
 		CreatedAt:    time.Now(),
 	}
 

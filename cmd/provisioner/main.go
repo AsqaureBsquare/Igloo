@@ -17,9 +17,9 @@ func main() {
 		log.Fatal("[provisioner] IGLOO_SERVER_URL must be set")
 	}
 
-	psk := os.Getenv("IGLOO_PROVISIONER_PSK")
+	psk := os.Getenv("IGLOO_PROVISIONER_KEY")
 	if psk == "" {
-		log.Fatal("[provisioner] IGLOO_PROVISIONER_PSK must be set")
+		log.Fatal("[provisioner] IGLOO_PROVISIONER_KEY must be set")
 	}
 
 	concurrency := 10

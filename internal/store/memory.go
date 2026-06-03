@@ -15,21 +15,25 @@ var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("already exists")
 
 type MemoryStore struct {
-	mu         sync.RWMutex
-	users      map[string]*models.User      // id → user
-	byEmail    map[string]string            // email → id
-	workspaces map[string]*models.Workspace // id → workspace
-	templates  map[string]*models.Template  // id → template
-	jobs       map[string]*models.ProvisionJob
+	mu            sync.RWMutex
+	users         map[string]*models.User           // id → user
+	byEmail       map[string]string                 // email → id
+	workspaces    map[string]*models.Workspace      // id → workspace
+	templates     map[string]*models.Template       // id → template
+	jobs          map[string]*models.ProvisionJob
+	provKeys      map[string]*models.ProvisionerKey // id → key
+	byTokenHash   map[string]string                 // tokenHash → id
 }
 
 func NewMemory() *MemoryStore {
 	return &MemoryStore{
-		users:      make(map[string]*models.User),
-		byEmail:    make(map[string]string),
-		workspaces: make(map[string]*models.Workspace),
-		templates:  make(map[string]*models.Template),
-		jobs:       make(map[string]*models.ProvisionJob),
+		users:       make(map[string]*models.User),
+		byEmail:     make(map[string]string),
+		workspaces:  make(map[string]*models.Workspace),
+		templates:   make(map[string]*models.Template),
+		jobs:        make(map[string]*models.ProvisionJob),
+		provKeys:    make(map[string]*models.ProvisionerKey),
+		byTokenHash: make(map[string]string),
 	}
 }
 
@@ -275,6 +279,63 @@ func (s *MemoryStore) ListStaleJobs(_ context.Context, olderThan time.Duration) 
 		}
 	}
 	return stale, nil
+}
+
+// ─── ProvisionerKeys ──────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateProvisionerKey(_ context.Context, k *models.ProvisionerKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *k
+	s.provKeys[k.ID] = &cp
+	s.byTokenHash[k.TokenHash] = k.ID
+	return nil
+}
+
+func (s *MemoryStore) GetProvisionerKeyByTokenHash(_ context.Context, hash string) (*models.ProvisionerKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.byTokenHash[hash]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *s.provKeys[id]
+	return &cp, nil
+}
+
+func (s *MemoryStore) ListProvisionerKeys(_ context.Context) ([]*models.ProvisionerKey, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*models.ProvisionerKey, 0, len(s.provKeys))
+	for _, k := range s.provKeys {
+		cp := *k
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) DeleteProvisionerKey(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.provKeys[id]
+	if !ok {
+		return ErrNotFound
+	}
+	delete(s.byTokenHash, k.TokenHash)
+	delete(s.provKeys, id)
+	return nil
+}
+
+func (s *MemoryStore) TouchProvisionerKey(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.provKeys[id]
+	if !ok {
+		return ErrNotFound
+	}
+	now := time.Now()
+	k.LastUsedAt = &now
+	return nil
 }
 
 func (s *MemoryStore) ListStaleDaemonJobs(_ context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error) {

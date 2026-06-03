@@ -41,4 +41,11 @@ type Store interface {
 	ListStaleJobs(ctx context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error)
 	// ListStaleDaemonJobs returns running daemon-claimed jobs whose Heartbeat is older than olderThan.
 	ListStaleDaemonJobs(ctx context.Context, olderThan time.Duration) ([]*models.ProvisionJob, error)
+
+	// ProvisionerKeys
+	CreateProvisionerKey(ctx context.Context, k *models.ProvisionerKey) error
+	GetProvisionerKeyByTokenHash(ctx context.Context, hash string) (*models.ProvisionerKey, error)
+	ListProvisionerKeys(ctx context.Context) ([]*models.ProvisionerKey, error)
+	DeleteProvisionerKey(ctx context.Context, id string) error
+	TouchProvisionerKey(ctx context.Context, id string) error
 }

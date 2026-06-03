@@ -10,11 +10,10 @@ import (
 )
 
 type Handler struct {
-	Store          store.Store
-	Auth           *auth.Auth
-	Relay          *relay.Relay
-	ProvisionerPSK string               // if set, provisioner API is enabled
-	Registry       *ProvisionerRegistry // parked acquire tokens from daemon WS connections
+	Store    store.Store
+	Auth     *auth.Auth
+	Relay    *relay.Relay
+	Registry *ProvisionerRegistry // parked acquire tokens from daemon WS connections
 }
 
 func (h *Handler) json(w http.ResponseWriter, status int, v any) {

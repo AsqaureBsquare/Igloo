@@ -58,7 +58,7 @@ resource "aws_ecs_service" "workspace" {
   network_configuration {
     subnets          = local.subnet_ids
     security_groups  = [var.security_group_id]
-    assign_public_ip = false
+    assign_public_ip = true
   }
 
   tags = {

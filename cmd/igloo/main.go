@@ -60,9 +60,9 @@ Usage:
   igloo version                                Print version
 
 Provisioner key subcommands:
-  igloo provisioner-keys create <name> [--tag k=v]...
-  igloo provisioner-keys list
-  igloo provisioner-keys revoke <id>
+  igloo pkeys new <name> [--tag k=v]...   Create a key (alias: create)
+  igloo pkeys ls                           List keys (alias: list)
+  igloo pkeys rm <id>                      Revoke a key (alias: revoke, delete)
 
 SSH setup:
   1. igloo login http://your-server.com you@example.com

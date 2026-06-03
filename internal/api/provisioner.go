@@ -328,12 +328,10 @@ func (h *Handler) handleJobFail(ctx context.Context, jobID, errMsg string) {
 	} else {
 		job.Status = models.JobFailed
 		log.Printf("[provisioner-api] job %s permanently failed: %s", jobID, errMsg)
-		if job.Action == models.JobStart {
-			if ws, err := h.Store.GetWorkspace(ctx, job.WorkspaceID); err == nil {
-				ws.Status = models.StatusError
-				ws.UpdatedAt = time.Now()
-				_ = h.Store.UpdateWorkspace(ctx, ws)
-			}
+		if ws, err := h.Store.GetWorkspace(ctx, job.WorkspaceID); err == nil {
+			ws.Status = models.StatusError
+			ws.UpdatedAt = time.Now()
+			_ = h.Store.UpdateWorkspace(ctx, ws)
 		}
 	}
 	_ = h.Store.UpdateJob(ctx, job)

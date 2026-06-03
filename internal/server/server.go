@@ -278,6 +278,12 @@ func (s *Server) runHeartbeatWatcher(ctx context.Context) {
 				if job.RetryCount >= models.JobMaxRetries {
 					job.Status = models.JobFailed
 					job.Error = "provisioner daemon lost contact"
+					log.Printf("[heartbeat-watcher] job %s permanently failed (daemon silent)", job.ID)
+					if ws, err := s.handler.Store.GetWorkspace(ctx, job.WorkspaceID); err == nil {
+						ws.Status = models.StatusError
+						ws.UpdatedAt = time.Now()
+						_ = s.handler.Store.UpdateWorkspace(ctx, ws)
+					}
 				} else {
 					job.RetryCount++
 					job.Status = models.JobPending
@@ -285,6 +291,9 @@ func (s *Server) runHeartbeatWatcher(ctx context.Context) {
 				}
 				job.UpdatedAt = time.Now()
 				_ = s.handler.Store.UpdateJob(ctx, job)
+				if job.Status == models.JobPending {
+					s.handler.TryImmediateDispatch(ctx)
+				}
 			}
 		}
 	}

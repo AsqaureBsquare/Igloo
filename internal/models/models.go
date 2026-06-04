@@ -19,6 +19,7 @@ const (
 	StatusRunning  WorkspaceStatus = "running"
 	StatusSleeping WorkspaceStatus = "sleeping"
 	StatusDeleting WorkspaceStatus = "deleting"
+	StatusDeleted  WorkspaceStatus = "deleted"
 	StatusError    WorkspaceStatus = "error"
 )
 

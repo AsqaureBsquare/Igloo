@@ -140,7 +140,7 @@ func (s *MemoryStore) ListWorkspaces(_ context.Context, userID string) ([]*model
 	defer s.mu.RUnlock()
 	var out []*models.Workspace
 	for _, w := range s.workspaces {
-		if w.UserID == userID {
+		if w.UserID == userID && w.Status != models.StatusDeleted {
 			cp := *w
 			out = append(out, &cp)
 		}

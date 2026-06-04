@@ -248,8 +248,13 @@ func (d *DynamoStore) ListWorkspaces(ctx context.Context, userID string) ([]*mod
 		TableName:              &d.workspaces,
 		IndexName:              aws.String("user-index"),
 		KeyConditionExpression: aws.String("user_id = :u"),
+		FilterExpression:       aws.String("#s <> :deleted"),
+		ExpressionAttributeNames: map[string]string{
+			"#s": "status",
+		},
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":u": &types.AttributeValueMemberS{Value: userID},
+			":u":       &types.AttributeValueMemberS{Value: userID},
+			":deleted": &types.AttributeValueMemberS{Value: "deleted"},
 		},
 	})
 	if err != nil {

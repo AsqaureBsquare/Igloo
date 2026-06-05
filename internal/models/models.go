@@ -101,6 +101,11 @@ type Organization struct {
 	Description string    `json:"description,omitempty"`
 	CreatedBy   string    `json:"created_by"`
 	CreatedAt   time.Time `json:"created_at"`
+
+	// OIDC group sync (Coder-style)
+	GroupClaims     []string          `json:"group_claims,omitempty"`  // IdP groups that grant org membership
+	GroupMapping    map[string]string `json:"group_mapping,omitempty"` // idp_group → team name override
+	GroupAutoCreate bool              `json:"group_auto_create"`       // create teams that don't exist yet
 }
 
 type OrgMember struct {

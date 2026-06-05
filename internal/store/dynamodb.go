@@ -20,6 +20,7 @@ type DynamoStore struct {
 	templates       string
 	jobs            string
 	provisionerKeys string
+	entities        string
 }
 
 func NewDynamoStore(ctx context.Context, region string) (*DynamoStore, error) {
@@ -34,6 +35,7 @@ func NewDynamoStore(ctx context.Context, region string) (*DynamoStore, error) {
 		templates:       "igloo-templates",
 		jobs:            "igloo-ws-jobs",
 		provisionerKeys: "igloo-provisioner-keys",
+		entities:        "igloo-entities",
 	}, nil
 }
 
@@ -710,32 +712,395 @@ func (d *DynamoStore) TouchProvisionerKey(ctx context.Context, id string) error 
 	return err
 }
 
-// ─── Organizations & Teams (DynamoDB — not yet implemented) ──────────────────
-// These are no-ops that satisfy the Store interface. Full DynamoDB
-// implementations will be added when multi-tenant cloud support is needed.
+// ─── Organizations & Teams (single-table: igloo-entities) ────────────────────
+// pk/sk key patterns — see dynamodb.tf for full scheme.
 
-func (d *DynamoStore) CreateOrg(_ context.Context, o *models.Organization) error { return ErrNotFound }
-func (d *DynamoStore) GetOrg(_ context.Context, id string) (*models.Organization, error) { return nil, ErrNotFound }
-func (d *DynamoStore) GetOrgBySlug(_ context.Context, slug string) (*models.Organization, error) { return nil, ErrNotFound }
-func (d *DynamoStore) ListOrgs(_ context.Context) ([]*models.Organization, error) { return nil, nil }
-func (d *DynamoStore) UpdateOrg(_ context.Context, o *models.Organization) error { return ErrNotFound }
-func (d *DynamoStore) DeleteOrg(_ context.Context, id string) error { return ErrNotFound }
+type entityItem struct {
+	PK              string            `dynamodbav:"pk"`
+	SK              string            `dynamodbav:"sk"`
+	Slug            string            `dynamodbav:"slug,omitempty"`
+	GSI1PK          string            `dynamodbav:"gsi1pk,omitempty"`
+	GSI1SK          string            `dynamodbav:"gsi1sk,omitempty"`
+	ID              string            `dynamodbav:"id,omitempty"`
+	OrgID           string            `dynamodbav:"org_id,omitempty"`
+	Name            string            `dynamodbav:"name,omitempty"`
+	Description     string            `dynamodbav:"description,omitempty"`
+	CreatedBy       string            `dynamodbav:"created_by,omitempty"`
+	CreatedAt       time.Time         `dynamodbav:"created_at"`
+	GroupClaims     []string          `dynamodbav:"group_claims,omitempty"`
+	GroupMapping    map[string]string `dynamodbav:"group_mapping,omitempty"`
+	GroupAutoCreate bool              `dynamodbav:"group_auto_create"`
+	UserID          string            `dynamodbav:"user_id,omitempty"`
+	UserEmail       string            `dynamodbav:"user_email,omitempty"`
+	UserName        string            `dynamodbav:"user_name,omitempty"`
+	Role            string            `dynamodbav:"role,omitempty"`
+	JoinedAt        time.Time         `dynamodbav:"joined_at"`
+}
 
-func (d *DynamoStore) AddOrgMember(_ context.Context, m *models.OrgMember) error { return ErrNotFound }
-func (d *DynamoStore) GetOrgMember(_ context.Context, orgID, userID string) (*models.OrgMember, error) { return nil, ErrNotFound }
-func (d *DynamoStore) ListOrgMembers(_ context.Context, orgID string) ([]*models.OrgMember, error) { return nil, nil }
-func (d *DynamoStore) ListUserOrgs(_ context.Context, userID string) ([]*models.OrgMember, error) { return nil, nil }
-func (d *DynamoStore) UpdateOrgMember(_ context.Context, m *models.OrgMember) error { return ErrNotFound }
-func (d *DynamoStore) RemoveOrgMember(_ context.Context, orgID, userID string) error { return ErrNotFound }
+func (d *DynamoStore) putEntity(ctx context.Context, item entityItem) error {
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{TableName: &d.entities, Item: av})
+	return err
+}
 
-func (d *DynamoStore) CreateTeam(_ context.Context, t *models.Team) error { return ErrNotFound }
-func (d *DynamoStore) GetTeam(_ context.Context, id string) (*models.Team, error) { return nil, ErrNotFound }
-func (d *DynamoStore) ListTeams(_ context.Context, orgID string) ([]*models.Team, error) { return nil, nil }
-func (d *DynamoStore) UpdateTeam(_ context.Context, t *models.Team) error { return ErrNotFound }
-func (d *DynamoStore) DeleteTeam(_ context.Context, id string) error { return ErrNotFound }
+func (d *DynamoStore) deleteEntity(ctx context.Context, pk, sk string) error {
+	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: &d.entities,
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: pk},
+			"sk": &types.AttributeValueMemberS{Value: sk},
+		},
+	})
+	return err
+}
 
-func (d *DynamoStore) AddTeamMember(_ context.Context, m *models.TeamMember) error { return ErrNotFound }
-func (d *DynamoStore) ListTeamMembers(_ context.Context, teamID string) ([]*models.TeamMember, error) { return nil, nil }
-func (d *DynamoStore) ListUserTeams(_ context.Context, userID string) ([]*models.TeamMember, error) { return nil, nil }
-func (d *DynamoStore) RemoveTeamMember(_ context.Context, teamID, userID string) error { return ErrNotFound }
-func (d *DynamoStore) SyncTeamMembers(_ context.Context, teamID string, userIDs []string) error { return ErrNotFound }
+// ─── Organizations ────────────────────────────────────────────────────────────
+
+func (d *DynamoStore) CreateOrg(ctx context.Context, o *models.Organization) error {
+	av, err := attributevalue.MarshalMap(entityItem{
+		PK: "ORG#" + o.ID, SK: "METADATA", Slug: o.Slug,
+		ID: o.ID, Name: o.Name, Description: o.Description,
+		CreatedBy: o.CreatedBy, CreatedAt: o.CreatedAt,
+		GroupClaims: o.GroupClaims, GroupMapping: o.GroupMapping, GroupAutoCreate: o.GroupAutoCreate,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           &d.entities,
+		Item:                av,
+		ConditionExpression: aws.String("attribute_not_exists(pk)"),
+	})
+	if err != nil {
+		var cce *types.ConditionalCheckFailedException
+		if errors.As(err, &cce) {
+			return ErrConflict
+		}
+	}
+	return err
+}
+
+func (d *DynamoStore) GetOrg(ctx context.Context, id string) (*models.Organization, error) {
+	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &d.entities,
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: "ORG#" + id},
+			"sk": &types.AttributeValueMemberS{Value: "METADATA"},
+		},
+	})
+	if err != nil || out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var i entityItem
+	if err := attributevalue.UnmarshalMap(out.Item, &i); err != nil {
+		return nil, err
+	}
+	return &models.Organization{ID: i.ID, Name: i.Name, Slug: i.Slug, Description: i.Description, CreatedBy: i.CreatedBy, CreatedAt: i.CreatedAt, GroupClaims: i.GroupClaims, GroupMapping: i.GroupMapping, GroupAutoCreate: i.GroupAutoCreate}, nil
+}
+
+func (d *DynamoStore) GetOrgBySlug(ctx context.Context, slug string) (*models.Organization, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.entities,
+		IndexName:              aws.String("slug-index"),
+		KeyConditionExpression: aws.String("slug = :s"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":s": &types.AttributeValueMemberS{Value: slug},
+		},
+		Limit: aws.Int32(1),
+	})
+	if err != nil || len(out.Items) == 0 {
+		return nil, ErrNotFound
+	}
+	var i entityItem
+	if err := attributevalue.UnmarshalMap(out.Items[0], &i); err != nil {
+		return nil, err
+	}
+	return &models.Organization{ID: i.ID, Name: i.Name, Slug: i.Slug, Description: i.Description, CreatedBy: i.CreatedBy, CreatedAt: i.CreatedAt, GroupClaims: i.GroupClaims, GroupMapping: i.GroupMapping, GroupAutoCreate: i.GroupAutoCreate}, nil
+}
+
+func (d *DynamoStore) ListOrgs(ctx context.Context) ([]*models.Organization, error) {
+	out, err := d.client.Scan(ctx, &dynamodb.ScanInput{
+		TableName:        &d.entities,
+		FilterExpression: aws.String("sk = :meta AND begins_with(pk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":meta": &types.AttributeValueMemberS{Value: "METADATA"},
+			":pfx":  &types.AttributeValueMemberS{Value: "ORG#"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	orgs := make([]*models.Organization, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var i entityItem
+		if err := attributevalue.UnmarshalMap(raw, &i); err == nil {
+			orgs = append(orgs, &models.Organization{ID: i.ID, Name: i.Name, Slug: i.Slug, Description: i.Description, CreatedBy: i.CreatedBy, CreatedAt: i.CreatedAt})
+		}
+	}
+	return orgs, nil
+}
+
+func (d *DynamoStore) UpdateOrg(ctx context.Context, o *models.Organization) error {
+	return d.putEntity(ctx, entityItem{
+		PK: "ORG#" + o.ID, SK: "METADATA", Slug: o.Slug,
+		ID: o.ID, Name: o.Name, Description: o.Description,
+		CreatedBy: o.CreatedBy, CreatedAt: o.CreatedAt,
+		GroupClaims: o.GroupClaims, GroupMapping: o.GroupMapping, GroupAutoCreate: o.GroupAutoCreate,
+	})
+}
+
+func (d *DynamoStore) DeleteOrg(ctx context.Context, id string) error {
+	return d.deleteEntity(ctx, "ORG#"+id, "METADATA")
+}
+
+// ─── Org members ──────────────────────────────────────────────────────────────
+
+func (d *DynamoStore) AddOrgMember(ctx context.Context, m *models.OrgMember) error {
+	return d.putEntity(ctx, entityItem{
+		PK: "ORG#" + m.OrgID, SK: "MEMBER#" + m.UserID,
+		GSI1PK: "USER#" + m.UserID, GSI1SK: "ORG#" + m.OrgID,
+		OrgID: m.OrgID, UserID: m.UserID, UserEmail: m.UserEmail,
+		UserName: m.UserName, Role: string(m.Role), JoinedAt: m.JoinedAt,
+	})
+}
+
+func (d *DynamoStore) GetOrgMember(ctx context.Context, orgID, userID string) (*models.OrgMember, error) {
+	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &d.entities,
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: "ORG#" + orgID},
+			"sk": &types.AttributeValueMemberS{Value: "MEMBER#" + userID},
+		},
+	})
+	if err != nil || out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var i entityItem
+	if err := attributevalue.UnmarshalMap(out.Item, &i); err != nil {
+		return nil, err
+	}
+	return &models.OrgMember{OrgID: i.OrgID, UserID: i.UserID, UserEmail: i.UserEmail, UserName: i.UserName, Role: models.OrgRole(i.Role), JoinedAt: i.JoinedAt}, nil
+}
+
+func (d *DynamoStore) ListOrgMembers(ctx context.Context, orgID string) ([]*models.OrgMember, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.entities,
+		KeyConditionExpression: aws.String("pk = :pk AND begins_with(sk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk":  &types.AttributeValueMemberS{Value: "ORG#" + orgID},
+			":pfx": &types.AttributeValueMemberS{Value: "MEMBER#"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out2 := make([]*models.OrgMember, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var i entityItem
+		if err := attributevalue.UnmarshalMap(raw, &i); err == nil {
+			out2 = append(out2, &models.OrgMember{OrgID: i.OrgID, UserID: i.UserID, UserEmail: i.UserEmail, UserName: i.UserName, Role: models.OrgRole(i.Role), JoinedAt: i.JoinedAt})
+		}
+	}
+	return out2, nil
+}
+
+func (d *DynamoStore) ListUserOrgs(ctx context.Context, userID string) ([]*models.OrgMember, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.entities,
+		IndexName:              aws.String("gsi1-index"),
+		KeyConditionExpression: aws.String("gsi1pk = :u AND begins_with(gsi1sk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":u":   &types.AttributeValueMemberS{Value: "USER#" + userID},
+			":pfx": &types.AttributeValueMemberS{Value: "ORG#"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	members := make([]*models.OrgMember, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var i entityItem
+		if err := attributevalue.UnmarshalMap(raw, &i); err == nil {
+			members = append(members, &models.OrgMember{OrgID: i.OrgID, UserID: i.UserID, UserEmail: i.UserEmail, UserName: i.UserName, Role: models.OrgRole(i.Role), JoinedAt: i.JoinedAt})
+		}
+	}
+	return members, nil
+}
+
+func (d *DynamoStore) UpdateOrgMember(ctx context.Context, m *models.OrgMember) error {
+	return d.AddOrgMember(ctx, m)
+}
+
+func (d *DynamoStore) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
+	return d.deleteEntity(ctx, "ORG#"+orgID, "MEMBER#"+userID)
+}
+
+// ─── Teams ────────────────────────────────────────────────────────────────────
+
+func (d *DynamoStore) CreateTeam(ctx context.Context, t *models.Team) error {
+	av, err := attributevalue.MarshalMap(entityItem{
+		PK: "TEAM#" + t.ID, SK: "METADATA",
+		GSI1PK: "ORG#" + t.OrgID, GSI1SK: "TEAM#" + t.ID,
+		ID: t.ID, OrgID: t.OrgID, Name: t.Name,
+		Description: t.Description, CreatedBy: t.CreatedBy, CreatedAt: t.CreatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           &d.entities,
+		Item:                av,
+		ConditionExpression: aws.String("attribute_not_exists(pk)"),
+	})
+	if err != nil {
+		var cce *types.ConditionalCheckFailedException
+		if errors.As(err, &cce) {
+			return ErrConflict
+		}
+	}
+	return err
+}
+
+func (d *DynamoStore) GetTeam(ctx context.Context, id string) (*models.Team, error) {
+	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &d.entities,
+		Key: map[string]types.AttributeValue{
+			"pk": &types.AttributeValueMemberS{Value: "TEAM#" + id},
+			"sk": &types.AttributeValueMemberS{Value: "METADATA"},
+		},
+	})
+	if err != nil || out.Item == nil {
+		return nil, ErrNotFound
+	}
+	var i entityItem
+	if err := attributevalue.UnmarshalMap(out.Item, &i); err != nil {
+		return nil, err
+	}
+	return &models.Team{ID: i.ID, OrgID: i.OrgID, Name: i.Name, Description: i.Description, CreatedBy: i.CreatedBy, CreatedAt: i.CreatedAt}, nil
+}
+
+func (d *DynamoStore) ListTeams(ctx context.Context, orgID string) ([]*models.Team, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.entities,
+		IndexName:              aws.String("gsi1-index"),
+		KeyConditionExpression: aws.String("gsi1pk = :o AND begins_with(gsi1sk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":o":   &types.AttributeValueMemberS{Value: "ORG#" + orgID},
+			":pfx": &types.AttributeValueMemberS{Value: "TEAM#"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	teams := make([]*models.Team, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var i entityItem
+		if err := attributevalue.UnmarshalMap(raw, &i); err == nil {
+			teams = append(teams, &models.Team{ID: i.ID, OrgID: i.OrgID, Name: i.Name, Description: i.Description, CreatedBy: i.CreatedBy, CreatedAt: i.CreatedAt})
+		}
+	}
+	return teams, nil
+}
+
+func (d *DynamoStore) UpdateTeam(ctx context.Context, t *models.Team) error {
+	return d.putEntity(ctx, entityItem{
+		PK: "TEAM#" + t.ID, SK: "METADATA",
+		GSI1PK: "ORG#" + t.OrgID, GSI1SK: "TEAM#" + t.ID,
+		ID: t.ID, OrgID: t.OrgID, Name: t.Name,
+		Description: t.Description, CreatedBy: t.CreatedBy, CreatedAt: t.CreatedAt,
+	})
+}
+
+func (d *DynamoStore) DeleteTeam(ctx context.Context, id string) error {
+	return d.deleteEntity(ctx, "TEAM#"+id, "METADATA")
+}
+
+// ─── Team members ─────────────────────────────────────────────────────────────
+
+func (d *DynamoStore) AddTeamMember(ctx context.Context, m *models.TeamMember) error {
+	return d.putEntity(ctx, entityItem{
+		PK: "TEAM#" + m.TeamID, SK: "MEMBER#" + m.UserID,
+		GSI1PK: "USER#" + m.UserID, GSI1SK: "TEAM#" + m.TeamID,
+		UserID: m.UserID, UserEmail: m.UserEmail, UserName: m.UserName, JoinedAt: m.JoinedAt,
+	})
+}
+
+func (d *DynamoStore) ListTeamMembers(ctx context.Context, teamID string) ([]*models.TeamMember, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.entities,
+		KeyConditionExpression: aws.String("pk = :pk AND begins_with(sk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":pk":  &types.AttributeValueMemberS{Value: "TEAM#" + teamID},
+			":pfx": &types.AttributeValueMemberS{Value: "MEMBER#"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	members := make([]*models.TeamMember, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var i entityItem
+		if err := attributevalue.UnmarshalMap(raw, &i); err == nil {
+			members = append(members, &models.TeamMember{TeamID: teamID, UserID: i.UserID, UserEmail: i.UserEmail, UserName: i.UserName, JoinedAt: i.JoinedAt})
+		}
+	}
+	return members, nil
+}
+
+func (d *DynamoStore) ListUserTeams(ctx context.Context, userID string) ([]*models.TeamMember, error) {
+	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
+		TableName:              &d.entities,
+		IndexName:              aws.String("gsi1-index"),
+		KeyConditionExpression: aws.String("gsi1pk = :u AND begins_with(gsi1sk, :pfx)"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":u":   &types.AttributeValueMemberS{Value: "USER#" + userID},
+			":pfx": &types.AttributeValueMemberS{Value: "TEAM#"},
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	members := make([]*models.TeamMember, 0, len(out.Items))
+	for _, raw := range out.Items {
+		var i entityItem
+		if err := attributevalue.UnmarshalMap(raw, &i); err == nil {
+			members = append(members, &models.TeamMember{UserID: i.UserID, UserEmail: i.UserEmail, UserName: i.UserName, JoinedAt: i.JoinedAt})
+		}
+	}
+	return members, nil
+}
+
+func (d *DynamoStore) RemoveTeamMember(ctx context.Context, teamID, userID string) error {
+	return d.deleteEntity(ctx, "TEAM#"+teamID, "MEMBER#"+userID)
+}
+
+func (d *DynamoStore) SyncTeamMembers(ctx context.Context, teamID string, userIDs []string) error {
+	existing, err := d.ListTeamMembers(ctx, teamID)
+	if err != nil {
+		return err
+	}
+	want := make(map[string]bool, len(userIDs))
+	for _, uid := range userIDs {
+		want[uid] = true
+	}
+	have := make(map[string]bool, len(existing))
+	for _, m := range existing {
+		have[m.UserID] = true
+		if !want[m.UserID] {
+			if err := d.RemoveTeamMember(ctx, teamID, m.UserID); err != nil {
+				return err
+			}
+		}
+	}
+	for _, uid := range userIDs {
+		if !have[uid] {
+			if err := d.AddTeamMember(ctx, &models.TeamMember{TeamID: teamID, UserID: uid, JoinedAt: time.Now()}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

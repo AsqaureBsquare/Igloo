@@ -20,7 +20,8 @@ type Handler struct {
 
 	// OIDC — nil when not configured
 	OIDC                *auth.OIDCProvider
-	DisablePasswordAuth bool // when true, /login and /register return 403
+	DisablePasswordAuth bool     // when true, /login and /register return 403
+	AllowedGroups       []string // if non-empty, user must belong to at least one of these IdP groups
 }
 
 func (h *Handler) json(w http.ResponseWriter, status int, v any) {

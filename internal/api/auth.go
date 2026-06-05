@@ -104,6 +104,12 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Global allowed-groups gate — reject if user isn't in any permitted group.
+	if len(h.AllowedGroups) > 0 && !hasGroupOverlap(h.AllowedGroups, groups) {
+		http.Redirect(w, r, "/?oidc_error=not in an allowed group", http.StatusFound)
+		return
+	}
+
 	// Find or create the user — link by email.
 	user, err := h.Store.GetUserByEmail(r.Context(), email)
 	if err != nil {
@@ -121,12 +127,8 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Sync OIDC groups → Igloo teams.
-	// For each group name in the id_token, find or create a team in every org
-	// the user belongs to, then add the user to matching teams.
-	if len(groups) > 0 {
-		h.syncOIDCGroups(r.Context(), user.ID, groups)
-	}
+	// Full Coder-style group sync on every login.
+	h.syncOIDCGroups(r.Context(), user, groups)
 
 	tok, err := h.Auth.SignUser(user.ID, user.Email)
 	if err != nil {
@@ -294,30 +296,148 @@ func (h *Handler) UpdateTailscaleKey(w http.ResponseWriter, r *http.Request) {
 	h.json(w, http.StatusOK, user)
 }
 
-// syncOIDCGroups maps the user into existing teams whose names match their OIDC
-// group claims. Teams and orgs are never created automatically — the admin owns
-// that structure. This only assigns membership to teams that already exist.
-func (h *Handler) syncOIDCGroups(ctx context.Context, userID string, groups []string) {
-	memberships, err := h.Store.ListUserOrgs(ctx, userID)
-	if err != nil || len(memberships) == 0 {
-		return
-	}
+// syncOIDCGroups is the full Coder-style group sync run on every OIDC login:
+//
+//  1. Find all orgs whose GroupClaims intersect the user's IdP groups.
+//  2. Add the user to qualifying orgs; remove them from orgs they no longer qualify for.
+//  3. Within each qualifying org, resolve which team each IdP group maps to
+//     (using GroupMapping for renames, GroupAutoCreate to create missing teams).
+//  4. Sync team memberships: add new, remove stale.
+func (h *Handler) syncOIDCGroups(ctx context.Context, user *models.User, groups []string) {
 	groupSet := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
 		groupSet[strings.ToLower(g)] = struct{}{}
 	}
-	for _, membership := range memberships {
-		existingTeams, _ := h.Store.ListTeams(ctx, membership.OrgID)
-		for _, team := range existingTeams {
-			if _, match := groupSet[strings.ToLower(team.Name)]; match {
-				_ = h.Store.AddTeamMember(ctx, &models.TeamMember{
-					TeamID:   team.ID,
-					UserID:   userID,
-					JoinedAt: time.Now(),
+
+	allOrgs, err := h.Store.ListOrgs(ctx)
+	if err != nil {
+		return
+	}
+
+	// Current org memberships so we can detect removals.
+	currentMemberships, _ := h.Store.ListUserOrgs(ctx, user.ID)
+	currentOrgIDs := make(map[string]struct{}, len(currentMemberships))
+	for _, m := range currentMemberships {
+		currentOrgIDs[m.OrgID] = struct{}{}
+	}
+
+	qualifyingOrgIDs := make(map[string]struct{})
+
+	for _, org := range allOrgs {
+		if len(org.GroupClaims) == 0 {
+			// Org has no group sync configured — skip (don't touch membership).
+			continue
+		}
+		qualifies := hasGroupOverlap(org.GroupClaims, groups)
+
+		if qualifies {
+			qualifyingOrgIDs[org.ID] = struct{}{}
+
+			// Add to org if not already a member.
+			if _, already := currentOrgIDs[org.ID]; !already {
+				_ = h.Store.AddOrgMember(ctx, &models.OrgMember{
+					OrgID:     org.ID,
+					UserID:    user.ID,
+					UserEmail: user.Email,
+					UserName:  user.Name,
+					Role:      models.OrgRoleMember,
+					JoinedAt:  time.Now(),
 				})
+			}
+
+			// Sync teams within this org.
+			h.syncOrgTeams(ctx, org, user, groupSet)
+		} else {
+			// User no longer qualifies — remove from org if they were auto-synced.
+			if _, wasMember := currentOrgIDs[org.ID]; wasMember {
+				_ = h.Store.RemoveOrgMember(ctx, org.ID, user.ID)
 			}
 		}
 	}
+}
+
+// syncOrgTeams syncs team membership for one org based on the user's group set.
+func (h *Handler) syncOrgTeams(ctx context.Context, org *models.Organization, user *models.User, groupSet map[string]struct{}) {
+	existingTeams, _ := h.Store.ListTeams(ctx, org.ID)
+	teamsByName := make(map[string]*models.Team, len(existingTeams))
+	for _, t := range existingTeams {
+		teamsByName[strings.ToLower(t.Name)] = t
+	}
+
+	// Determine which teams the user should be in after this sync.
+	targetTeamIDs := make(map[string]struct{})
+
+	for idpGroup := range groupSet {
+		// Apply name mapping if configured, otherwise use the group name as-is.
+		teamName := idpGroup
+		if org.GroupMapping != nil {
+			if mapped, ok := org.GroupMapping[idpGroup]; ok {
+				teamName = strings.ToLower(mapped)
+			}
+		}
+
+		team, exists := teamsByName[teamName]
+		if !exists {
+			if !org.GroupAutoCreate {
+				continue
+			}
+			// Auto-create the team.
+			team = &models.Team{
+				ID:        uuid.NewString(),
+				OrgID:     org.ID,
+				Name:      teamName,
+				CreatedBy: "__oidc__",
+				CreatedAt: time.Now(),
+			}
+			if err := h.Store.CreateTeam(ctx, team); err != nil {
+				continue
+			}
+			teamsByName[teamName] = team
+		}
+		targetTeamIDs[team.ID] = struct{}{}
+	}
+
+	// Add to target teams.
+	for teamID := range targetTeamIDs {
+		_ = h.Store.AddTeamMember(ctx, &models.TeamMember{
+			TeamID:    teamID,
+			UserID:    user.ID,
+			UserEmail: user.Email,
+			UserName:  user.Name,
+			JoinedAt:  time.Now(),
+		})
+	}
+
+	// Remove from teams the user is in but no longer qualifies for.
+	currentTeams, _ := h.Store.ListUserTeams(ctx, user.ID)
+	for _, tm := range currentTeams {
+		// Only remove from teams belonging to this org.
+		isOrgTeam := false
+		for _, t := range existingTeams {
+			if t.ID == tm.TeamID {
+				isOrgTeam = true
+				break
+			}
+		}
+		if isOrgTeam {
+			if _, keep := targetTeamIDs[tm.TeamID]; !keep {
+				_ = h.Store.RemoveTeamMember(ctx, tm.TeamID, user.ID)
+			}
+		}
+	}
+}
+
+// hasGroupOverlap returns true if any element in allowed appears (case-insensitively) in userGroups.
+func hasGroupOverlap(allowed, userGroups []string) bool {
+	for _, a := range allowed {
+		al := strings.ToLower(a)
+		for _, g := range userGroups {
+			if strings.ToLower(g) == al {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Middleware: require valid user JWT, inject user_id into context.

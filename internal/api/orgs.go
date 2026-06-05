@@ -55,8 +55,11 @@ func (h *Handler) ListOrgs(w http.ResponseWriter, r *http.Request) {
 // POST /api/orgs
 func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name            string            `json:"name"`
+		Description     string            `json:"description"`
+		GroupClaims     []string          `json:"group_claims"`
+		GroupMapping    map[string]string `json:"group_mapping"`
+		GroupAutoCreate bool              `json:"group_auto_create"`
 	}
 	if err := h.decode(r, &body); err != nil || body.Name == "" {
 		h.err(w, http.StatusBadRequest, "name is required")
@@ -64,12 +67,15 @@ func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := ctxUserID(r)
 	org := &models.Organization{
-		ID:          uuid.NewString(),
-		Name:        strings.TrimSpace(body.Name),
-		Slug:        toSlug(body.Name),
-		Description: body.Description,
-		CreatedBy:   userID,
-		CreatedAt:   time.Now(),
+		ID:              uuid.NewString(),
+		Name:            strings.TrimSpace(body.Name),
+		Slug:            toSlug(body.Name),
+		Description:     body.Description,
+		GroupClaims:     body.GroupClaims,
+		GroupMapping:    body.GroupMapping,
+		GroupAutoCreate: body.GroupAutoCreate,
+		CreatedBy:       userID,
+		CreatedAt:       time.Now(),
 	}
 	if err := h.Store.CreateOrg(r.Context(), org); err != nil {
 		if err == store.ErrConflict {
@@ -105,8 +111,11 @@ func (h *Handler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name            string            `json:"name"`
+		Description     string            `json:"description"`
+		GroupClaims     []string          `json:"group_claims"`
+		GroupMapping    map[string]string `json:"group_mapping"`
+		GroupAutoCreate *bool             `json:"group_auto_create"`
 	}
 	if err := h.decode(r, &body); err != nil {
 		h.err(w, http.StatusBadRequest, "invalid body")
@@ -117,6 +126,15 @@ func (h *Handler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		org.Slug = toSlug(body.Name)
 	}
 	org.Description = body.Description
+	if body.GroupClaims != nil {
+		org.GroupClaims = body.GroupClaims
+	}
+	if body.GroupMapping != nil {
+		org.GroupMapping = body.GroupMapping
+	}
+	if body.GroupAutoCreate != nil {
+		org.GroupAutoCreate = *body.GroupAutoCreate
+	}
 	if err := h.Store.UpdateOrg(r.Context(), org); err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
 		return

@@ -61,6 +61,9 @@ func New(st store.Store, a *auth.Auth) *Server {
 		}
 	}
 	h.DisablePasswordAuth = os.Getenv("IGLOO_DISABLE_PASSWORD_AUTH") == "true"
+	if raw := os.Getenv("IGLOO_OIDC_ALLOWED_GROUPS"); raw != "" {
+		h.AllowedGroups = strings.Fields(strings.ReplaceAll(raw, ",", " "))
+	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)

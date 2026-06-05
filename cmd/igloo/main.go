@@ -557,6 +557,13 @@ func runServer(args []string) {
 	if local {
 		log.Println("[igloo] using in-memory store (--local mode)")
 		st = store.NewMemory()
+	} else if dbURL := os.Getenv("IGLOO_DATABASE_URL"); dbURL != "" {
+		pg, err := store.NewPostgresStore(context.Background(), dbURL)
+		if err != nil {
+			log.Fatalf("[igloo] postgres init failed: %v", err)
+		}
+		log.Printf("[igloo] using postgres store")
+		st = pg
 	} else {
 		region := os.Getenv("AWS_REGION")
 		if region == "" {

@@ -93,15 +93,18 @@ eks-kubeconfig:
 helm-push: push push-provisioner push-workspace
 
 helm-deploy: helm-push eks-kubeconfig
+	$(eval ALB_ARN := $(shell cd infra/eks && terraform output -raw alb_arn))
+	$(eval ALB_DNS := $(shell cd infra/eks && terraform output -raw alb_dns))
 	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
 		-f $(HELM_VALUES) \
 		--set server.jwtSecret="$(IGLOO_JWT_SECRET)" \
 		--set provisioner.key="$(IGLOO_PROVISIONER_KEY)" \
 		--set "server.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=$(IGLOO_IRSA_ROLE_ARN)" \
+		--set "server.ingress.annotations.alb\.ingress\.kubernetes\.io/load-balancer-arn=$(ALB_ARN)" \
 		--wait --timeout 5m
 	@echo ""
-	@echo "Igloo deployed. Getting ALB URL..."
-	@kubectl get ingress igloo-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "(ALB still provisioning — run: kubectl get ingress)"
+	@echo "Igloo deployed on existing ALB: http://$(ALB_DNS)"
+	@echo "(same URL as before — ALB now routes to EKS pods)"
 
 helm-status:
 	helm status $(HELM_RELEASE)

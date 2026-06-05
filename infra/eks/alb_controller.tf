@@ -1,5 +1,18 @@
 # ─── AWS Load Balancer Controller ─────────────────────────────────────────────
 # Watches Ingress/Service objects and manages ALB/NLB on AWS.
+#
+# The controller attaches to the EXISTING igloo-alb (created by infra/ecs) via the
+# load-balancer-arn Ingress annotation. It creates a new target group on that ALB
+# and registers EKS pods. The ALB URL stays the same — no DNS change needed.
+
+# Tag the existing ALB so the LB controller can manage it
+resource "aws_lb_tag" "main" {
+  resource_arn = data.aws_lb.main.arn
+  tags = {
+    "elbv2.k8s.aws/cluster"    = var.cluster_name
+    "ingress.k8s.aws/resource" = "LoadBalancer"
+  }
+}
 
 # IAM policy — fetch from upstream source
 data "http" "alb_controller_policy" {

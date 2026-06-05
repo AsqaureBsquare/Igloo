@@ -1,3 +1,13 @@
+output "alb_arn" {
+  description = "Existing igloo ALB ARN — passed to Helm as the load-balancer-arn Ingress annotation"
+  value       = data.aws_lb.main.arn
+}
+
+output "alb_dns" {
+  description = "ALB DNS name (unchanged — EKS pods join as a new target group)"
+  value       = data.aws_lb.main.dns_name
+}
+
 output "cluster_name" {
   value = module.eks.cluster_name
 }

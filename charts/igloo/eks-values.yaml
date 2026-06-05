@@ -40,10 +40,13 @@ server:
       kubernetes.io/ingress.class: alb
       alb.ingress.kubernetes.io/scheme: internet-facing
       alb.ingress.kubernetes.io/target-type: ip
-      alb.ingress.kubernetes.io/load-balancer-name: igloo-eks-alb
+      # Attach to the existing igloo-alb created by infra/ecs.
+      # LB controller registers EKS pods as a new target group on that ALB.
+      # Set at deploy time: --set server.ingress.annotations."alb\.ingress\.kubernetes\.io/load-balancer-arn"=$ALB_ARN
+      alb.ingress.kubernetes.io/load-balancer-arn: ""
       alb.ingress.kubernetes.io/idle-timeout: "3600"
       alb.ingress.kubernetes.io/healthcheck-path: /health
-    host: ""   # leave empty for wildcard; set to your domain for named routing
+    host: ""
     tls: []
 
   resources:

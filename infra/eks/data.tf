@@ -14,6 +14,11 @@ data "aws_subnets" "public" {
   }
 }
 
+# Existing ALB created by infra/ecs — EKS pods will be registered as a new target group on it
+data "aws_lb" "main" {
+  name = "igloo-alb"
+}
+
 data "aws_caller_identity" "current" {}
 
 data "aws_ecrpublic_authorization_token" "token" {

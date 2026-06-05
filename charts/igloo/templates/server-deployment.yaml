@@ -57,6 +57,19 @@ spec:
               value: {{ .Values.server.dynamo.templatesTable | quote }}
             - name: IGLOO_DYNAMO_JOBS_TABLE
               value: {{ .Values.server.dynamo.jobsTable | quote }}
+            {{- if .Values.server.database.postgresURL }}
+            - name: IGLOO_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.fullname" . }}-secrets
+                  key: IGLOO_DATABASE_URL
+            {{- else if .Values.server.database.mongoURL }}
+            - name: IGLOO_MONGO_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.fullname" . }}-secrets
+                  key: IGLOO_MONGO_URL
+            {{- end }}
             {{- if .Values.server.oidc.enabled }}
             - name: IGLOO_OIDC_ISSUER_URL
               value: {{ .Values.server.oidc.issuerURL | quote }}

@@ -28,6 +28,14 @@ server:
   # Public URL the server is reachable at (used by workspace agents to dial home)
   serverURL: ""
 
+  # Database backend (optional — defaults to DynamoDB when neither is set)
+  # Connection strings are stored in a Kubernetes Secret.
+  database:
+    # PostgreSQL: postgres://user:pass@host:5432/igloo
+    postgresURL: ""
+    # MongoDB: mongodb://user:pass@host:27017/igloo  (or Atlas SRV URI)
+    mongoURL: ""
+
   # OIDC / SSO configuration (optional)
   oidc:
     enabled: false

@@ -19,7 +19,12 @@ const api = (() => {
       register: (name, email, password) => req('POST', '/api/auth/register', { name, email, password }),
       login:    (email, password)        => req('POST', '/api/auth/login',    { email, password }),
       me:       ()                       => req('GET',  '/api/auth/me'),
-      saveSSHKey: (key)                  => req('PUT',  '/api/auth/me/ssh-key', { ssh_public_key: key }),
+      saveSSHKey:       (key)  => req('PUT', '/api/auth/me/ssh-key',       { ssh_public_key: key }),
+      saveTailscaleKey: (key)  => req('PUT', '/api/auth/me/tailscale-key', { tailscale_auth_key: key }),
+    },
+    platformConfig: {
+      get:  ()     => req('GET', '/api/admin/platform-config'),
+      save: (body) => req('PUT', '/api/admin/platform-config', body),
     },
     workspaces: {
       list:     ()             => req('GET',    '/api/workspaces'),
@@ -42,6 +47,23 @@ const api = (() => {
       updateUser: (id, body)  => req('PUT',    `/api/admin/users/${id}`, body),
       deleteUser: (id)        => req('DELETE', `/api/admin/users/${id}`),
     },
+    orgs: {
+      list:          ()              => req('GET',    '/api/orgs'),
+      create:        (body)          => req('POST',   '/api/orgs', body),
+      get:           (id)            => req('GET',    `/api/orgs/${id}`),
+      update:        (id, body)      => req('PUT',    `/api/orgs/${id}`, body),
+      del:           (id)            => req('DELETE', `/api/orgs/${id}`),
+      listMembers:   (id)            => req('GET',    `/api/orgs/${id}/members`),
+      addMember:     (id, body)      => req('POST',   `/api/orgs/${id}/members`, body),
+      updateMember:  (id, uid, body) => req('PUT',    `/api/orgs/${id}/members/${uid}`, body),
+      removeMember:  (id, uid)       => req('DELETE', `/api/orgs/${id}/members/${uid}`),
+      listTeams:     (id)            => req('GET',    `/api/orgs/${id}/teams`),
+      createTeam:    (id, body)      => req('POST',   `/api/orgs/${id}/teams`, body),
+      deleteTeam:    (id, tid)       => req('DELETE', `/api/orgs/${id}/teams/${tid}`),
+      listTeamMembers: (id, tid)     => req('GET',    `/api/orgs/${id}/teams/${tid}/members`),
+      addTeamMember:   (id, tid, body) => req('POST', `/api/orgs/${id}/teams/${tid}/members`, body),
+      removeTeamMember:(id, tid, uid)  => req('DELETE',`/api/orgs/${id}/teams/${tid}/members/${uid}`),
+    },
     workspaceLogs: (id) => fetch('/api/workspaces/' + id + '/logs', {
       headers: { 'Authorization': 'Bearer ' + localStorage.getItem('igloo_token') }
     }).then(r => r.text()),
@@ -52,7 +74,75 @@ const api = (() => {
 })();
 
 // ─── State ────────────────────────────────────────────────────────────────────
-const state = { user: null, workspaces: [], templates: [], view: 'igloos', poll: null };
+const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null };
+
+// ─── Provision log streaming ──────────────────────────────────────────────────
+const provLog = {
+  lines:   {},   // workspaceID → string[]
+  sources: {},   // workspaceID → EventSource
+
+  connect(wsID) {
+    if (this.sources[wsID]) return;
+    if (!this.lines[wsID]) this.lines[wsID] = [];
+    const token = localStorage.getItem('igloo_token');
+    const es = new EventSource(`/api/workspaces/${wsID}/provision-logs?token=${token}`);
+    this.sources[wsID] = es;
+    es.onmessage = (e) => {
+      if (!this.lines[wsID]) this.lines[wsID] = [];
+      this.lines[wsID].push(e.data);
+      if (this.lines[wsID].length > 500) this.lines[wsID].shift();
+      const panel = document.getElementById(`log-panel-${wsID}`);
+      if (panel) {
+        const el = document.createElement('div');
+        el.className = 'log-line ' + logLineClass(e.data);
+        el.textContent = e.data;
+        panel.appendChild(el);
+        panel.scrollTop = panel.scrollHeight;
+      }
+    };
+    es.onerror = () => { es.close(); delete this.sources[wsID]; };
+  },
+
+  disconnect(wsID) {
+    if (this.sources[wsID]) { this.sources[wsID].close(); delete this.sources[wsID]; }
+  },
+
+  clear(wsID) {
+    this.disconnect(wsID);
+    delete this.lines[wsID];
+  },
+
+  sync(workspaces) {
+    const active = new Set(
+      workspaces.filter(w => w.status === 'creating' || w.status === 'deleting').map(w => w.id)
+    );
+    active.forEach(id => this.connect(id));
+    Object.keys(this.sources).forEach(id => { if (!active.has(id)) this.disconnect(id); });
+  },
+};
+
+function logLineClass(line) {
+  if (/^✓|Apply complete|destroyed\.|creation complete/i.test(line)) return 'log-ok';
+  if (/^✗|Error:|error:/i.test(line)) return 'log-err';
+  if (/Warning:/i.test(line)) return 'log-warn';
+  if (/^#|\s+#/.test(line)) return 'log-dim';
+  return '';
+}
+
+function renderLogPanel(wsID) {
+  const lines = provLog.lines[wsID] || [];
+  const rows = lines.map(l =>
+    `<div class="log-line ${logLineClass(l)}">${esc(l)}</div>`
+  ).join('');
+  return `
+    <div class="log-panel-wrap">
+      <div class="log-panel-header">
+        <span>Provisioner output</span>
+        <span id="log-status-${wsID}"></span>
+      </div>
+      <div class="log-panel" id="log-panel-${wsID}" style="scroll-behavior:auto">${rows}</div>
+    </div>`;
+}
 
 // ─── Terminal ─────────────────────────────────────────────────────────────────
 const term = (() => {
@@ -281,6 +371,45 @@ function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ─── Avatar / badge helpers ────────────────────────────────────────────────────
+function _avatarPalette(str) {
+  const palettes = [
+    { bg: 'rgba(0,212,255,0.15)',   border: 'rgba(0,212,255,0.3)',   color: '#00d4ff' },
+    { bg: 'rgba(157,92,255,0.15)',  border: 'rgba(157,92,255,0.3)',  color: '#9d5cff' },
+    { bg: 'rgba(52,211,153,0.15)',  border: 'rgba(52,211,153,0.3)',  color: '#34d399' },
+    { bg: 'rgba(251,191,36,0.15)',  border: 'rgba(251,191,36,0.3)',  color: '#fbbf24' },
+    { bg: 'rgba(236,72,153,0.15)', border: 'rgba(236,72,153,0.3)',  color: '#ec4899' },
+    { bg: 'rgba(255,107,53,0.15)',  border: 'rgba(255,107,53,0.3)',  color: '#ff6b35' },
+  ];
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h * 31 + str.charCodeAt(i), 1) | 0;
+  return palettes[Math.abs(h) % palettes.length];
+}
+
+function userAvatar(name, size = 30) {
+  const p = _avatarPalette(name || '?');
+  const letter = (name || '?')[0].toUpperCase();
+  const fs = Math.round(size * 0.42);
+  return `<div style="width:${size}px;height:${size}px;border-radius:50%;background:${p.bg};border:1px solid ${p.border};display:flex;align-items:center;justify-content:center;font-size:${fs}px;font-weight:700;color:${p.color};flex-shrink:0;letter-spacing:-0.5px;user-select:none">${letter}</div>`;
+}
+
+function orgAvatar(name, size = 36, radius = '10px') {
+  const p = _avatarPalette(name || '?');
+  const letter = (name || '?')[0].toUpperCase();
+  const fs = Math.round(size * 0.44);
+  return `<div style="width:${size}px;height:${size}px;border-radius:${radius};background:${p.bg};border:1px solid ${p.border};display:flex;align-items:center;justify-content:center;font-size:${fs}px;font-weight:800;color:${p.color};flex-shrink:0;user-select:none">${letter}</div>`;
+}
+
+function roleBadge(role) {
+  const styles = {
+    admin:  'background:rgba(0,212,255,0.1);color:#00d4ff;border:1px solid rgba(0,212,255,0.22)',
+    member: 'background:rgba(255,255,255,0.05);color:var(--muted);border:1px solid var(--border)',
+    viewer: 'background:rgba(255,255,255,0.03);color:var(--muted);border:1px solid var(--border)',
+  };
+  const s = styles[role] || styles.member;
+  return `<span style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:5px;padding:2px 8px;${s}">${esc(role)}</span>`;
+}
+
 function statusBadge(status) {
   const labels = {
     running:  'Active',
@@ -320,11 +449,12 @@ function renderIglooCard(ws) {
   const canStop    = ws.status === 'running'  || ws.status === 'creating';
   const isBuilding = ws.status === 'creating';
   const isFailed   = ws.status === 'error';
+  const showLogs   = isBuilding || isDeleting;
 
   const isTerraform = ['docker-terraform','aws-fargate','fly','gcp-cloudrun'].includes(ws.provider);
 
   return `
-  <div class="igloo-card" data-id="${ws.id}">
+  <div class="igloo-card${showLogs ? ' igloo-card--active' : ''}" data-id="${ws.id}">
     <div class="igloo-card-header">
       <div>
         <div class="igloo-name">${esc(ws.name)}</div>
@@ -336,6 +466,8 @@ function renderIglooCard(ws) {
     ${isBuilding ? buildingAnimation() : ''}
     ${isFailed   ? errorAnimation()   : ''}
 
+    ${showLogs ? renderLogPanel(ws.id) : ''}
+
     <div class="igloo-meta">
       <span class="text-muted text-sm">${timeAgo(ws.last_active_at)}</span>
       ${costLabel(ws)}
@@ -345,7 +477,7 @@ function renderIglooCard(ws) {
       ${canConnect ? `<button class="btn btn-ghost btn-sm" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
       ${canStart   ? `<button class="btn btn-ghost" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
       ${canStop    ? `<button class="btn btn-ghost" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
-      <button class="btn btn-ghost" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>
+      ${showLogs   ? '' : `<button class="btn btn-ghost" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>`}
       ${isDeleting ? '' : `<button class="btn btn-icon btn-danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">🗑</button>`}
     </div>
   </div>`;
@@ -381,6 +513,14 @@ function renderShell() {
         <button class="nav-item ${state.view==='templates'?'active':''}" onclick="app.setView('templates')">
           ${icon.templates} Templates
         </button>
+        <span class="nav-section-label">Organization</span>
+        <button class="nav-item ${state.view==='orgs'?'active':''}" onclick="app.setView('orgs')">
+          ${icon.users} Organizations
+        </button>
+        ${state.currentOrg ? `
+        <button class="nav-item ${state.view==='org-detail'?'active':''}" onclick="app.setView('org-detail')" style="padding-left:28px;font-size:12px">
+          ↳ ${esc(state.currentOrg.name)}
+        </button>` : ''}
         ${u?.is_admin ? `
         <span class="nav-section-label">Admin</span>
         <button class="nav-item ${state.view==='users'?'active':''}" onclick="app.setView('users')">
@@ -437,6 +577,12 @@ function renderIgloosView() {
     return;
   }
   el.innerHTML = `<div class="igloo-grid">${state.workspaces.map(renderIglooCard).join('')}</div>`;
+  provLog.sync(state.workspaces);
+  // Scroll all visible log panels to bottom (populated from buffered lines)
+  state.workspaces.forEach(ws => {
+    const panel = document.getElementById(`log-panel-${ws.id}`);
+    if (panel) panel.scrollTop = panel.scrollHeight;
+  });
 }
 
 function renderTemplatesView(selectedId) {
@@ -500,6 +646,54 @@ function renderSettingsView() {
   </div>`;
 }
 
+async function renderIntegrationsView() {
+  document.getElementById('view-title').textContent = 'Integrations';
+  document.getElementById('topbar-actions').innerHTML = '';
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+
+  let cfg = { tailscale_configured: false, tailscale_tailnet: '' };
+  try { cfg = await api.platformConfig.get(); } catch {}
+
+  el.innerHTML = `
+  <div style="max-width:580px;display:flex;flex-direction:column;gap:14px">
+    <div class="settings-card">
+      <div class="settings-card-title" style="display:flex;align-items:center;gap:8px">
+        Tailscale
+        ${cfg.tailscale_configured
+          ? '<span style="font-size:11px;background:rgba(0,255,179,.12);color:var(--teal);padding:2px 8px;border-radius:20px;font-weight:500">Connected</span>'
+          : '<span style="font-size:11px;background:rgba(255,61,107,.08);color:var(--muted);padding:2px 8px;border-radius:20px">Not configured</span>'}
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+        Set a Tailscale API key once here and every workspace will automatically join your Tailnet on boot — no per-user setup required.
+        Generate an API key at <span style="font-family:var(--mono);font-size:12px">tailscale.com/admin/settings/keys</span>
+        with <strong>Write</strong> scope.
+      </p>
+      <div class="field">
+        <label>Tailscale API key ${cfg.tailscale_configured ? '(leave blank to keep existing)' : ''}</label>
+        <input id="ts-api-key" type="password" placeholder="tskey-api-kXXXXXX-XXXXXXXX"
+          style="font-family:var(--mono);font-size:12px" />
+      </div>
+      <div class="field" style="margin-bottom:16px">
+        <label>Tailnet (leave blank for default)</label>
+        <input id="ts-tailnet" type="text" placeholder="example.com or - for personal"
+          style="font-family:var(--mono);font-size:12px"
+          value="${esc(cfg.tailscale_tailnet || '')}" />
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-primary" style="width:auto" onclick="app.savePlatformTailscale()">
+          ${cfg.tailscale_configured ? 'Update key' : 'Save & enable'}
+        </button>
+        ${cfg.tailscale_configured ? `<button class="btn btn-ghost btn-sm" onclick="app.clearPlatformTailscale()">Disconnect</button>` : ''}
+      </div>
+      ${cfg.tailscale_configured ? `
+      <div style="margin-top:14px;padding:12px 14px;background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.15);border-radius:var(--radius-sm);font-size:12px;color:var(--muted);line-height:1.7">
+        <strong style="color:var(--text)">How it works:</strong> On each workspace wake, Igloo issues a fresh ephemeral auth key via the Tailscale API and injects it into the container. The workspace joins your Tailnet automatically. SSH via <span style="font-family:var(--mono)">ssh root@igloo-&lt;name&gt;</span>.
+      </div>` : ''}
+    </div>
+  </div>`;
+}
+
 async function renderUsersView() {
   document.getElementById('view-title').textContent = 'Users';
   document.getElementById('topbar-actions').innerHTML = '';
@@ -528,6 +722,159 @@ async function renderUsersView() {
           </tr>`).join('')}
         </tbody>
       </table>
+    </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
+  }
+}
+
+// ─── Organizations views ──────────────────────────────────────────────────────
+
+async function renderOrgsView() {
+  document.getElementById('view-title').textContent = 'Organizations';
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-ghost btn-sm" onclick="app.showCreateOrg()">${icon.plus} New organization</button>`;
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+  try {
+    const orgs = await api.orgs.list();
+    state.orgs = orgs || [];
+    if (!orgs || !orgs.length) {
+      el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🏢</div>
+        <h2>No organizations yet</h2>
+        <p>Create an organization to manage teams and members.</p>
+        <button class="btn btn-ghost btn-sm" style="margin:0 auto" onclick="app.showCreateOrg()">${icon.plus} New organization</button>
+      </div>`;
+      return;
+    }
+    el.innerHTML = `
+    <div style="max-width:680px;display:grid;gap:6px">
+      ${orgs.map(o => `
+      <div class="org-list-card" onclick="app.openOrg('${o.id}')">
+        ${orgAvatar(o.name, 38, '10px')}
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:14px;letter-spacing:-0.2px">${esc(o.name)}</div>
+          <div style="font-size:11px;color:var(--muted);font-family:var(--mono);margin-top:2px">${esc(o.slug)}</div>
+          ${o.description ? `<div style="font-size:12px;color:var(--muted);margin-top:3px">${esc(o.description)}</div>` : ''}
+        </div>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--muted);opacity:.5;flex-shrink:0"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>`).join('')}
+    </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
+  }
+}
+
+async function renderOrgDetailView() {
+  const org = state.currentOrg;
+  if (!org) { app.setView('orgs'); return; }
+  document.getElementById('view-title').textContent = org.name;
+  document.getElementById('topbar-actions').innerHTML =
+    `<button class="btn btn-ghost btn-sm" onclick="app.setView('orgs')">← All orgs</button>`;
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+
+  try {
+    const [members, teams] = await Promise.all([
+      api.orgs.listMembers(org.id),
+      api.orgs.listTeams(org.id),
+    ]);
+
+    const mc = (members||[]).length;
+    const tc = (teams||[]).length;
+
+    el.innerHTML = `
+    <div style="max-width:820px;display:grid;gap:20px">
+
+      <!-- Org header -->
+      <div style="display:flex;align-items:center;gap:14px;padding-bottom:4px">
+        ${orgAvatar(org.name, 44, '12px')}
+        <div style="flex:1;min-width:0">
+          <div style="font-size:18px;font-weight:700;letter-spacing:-0.4px">${esc(org.name)}</div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-family:var(--mono)">${esc(org.slug)}</span>
+            <span style="opacity:.35">·</span>
+            <span>${mc} member${mc !== 1 ? 's' : ''}</span>
+            <span style="opacity:.35">·</span>
+            <span>${tc} team${tc !== 1 ? 's' : ''}</span>
+            ${org.description ? `<span style="opacity:.35">·</span><span>${esc(org.description)}</span>` : ''}
+          </div>
+        </div>
+      </div>
+
+      <!-- Members panel -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">Members</div>
+            <div class="panel-subtitle">${mc} member${mc !== 1 ? 's' : ''}</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="app.showAddOrgMember('${org.id}')">${icon.plus} Add member</button>
+        </div>
+        <table class="panel-table">
+          <thead><tr><th>Member</th><th>Email</th><th>Role</th><th></th></tr></thead>
+          <tbody>
+            ${(members||[]).map(m => `
+            <tr>
+              <td>
+                <div style="display:flex;align-items:center;gap:10px">
+                  ${userAvatar(m.user_name || m.user_email || '?', 28)}
+                  <span style="font-weight:500;font-size:13px">${esc(m.user_name || '—')}</span>
+                </div>
+              </td>
+              <td style="font-family:var(--mono);font-size:12px;color:var(--muted)">${esc(m.user_email || m.user_id)}</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  ${roleBadge(m.role)}
+                  <select class="role-select" style="font-size:11px;padding:2px 4px;opacity:.6" onchange="app.updateOrgMemberRole('${org.id}','${m.user_id}',this.value)" title="Change role">
+                    <option value="admin"  ${m.role==='admin'  ?'selected':''}>Admin</option>
+                    <option value="member" ${m.role==='member' ?'selected':''}>Member</option>
+                    <option value="viewer" ${m.role==='viewer' ?'selected':''}>Viewer</option>
+                  </select>
+                </div>
+              </td>
+              <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-ghost btn-sm" style="color:var(--red);font-size:11px"
+                  onclick="app.removeOrgMember('${org.id}','${m.user_id}','${esc(m.user_email||'')}')">Remove</button>
+              </td>
+            </tr>`).join('') || `
+            <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:32px;font-size:13px">
+              No members yet — add one above.
+            </td></tr>`}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Teams panel -->
+      <div class="panel-card">
+        <div class="panel-header">
+          <div>
+            <div class="panel-title">Teams</div>
+            <div class="panel-subtitle">${tc ? `${tc} team${tc !== 1 ? 's' : ''}` : 'Synced automatically from OIDC groups'}</div>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="app.showCreateTeam('${org.id}')">${icon.plus} New team</button>
+        </div>
+        ${tc ? `
+        <div style="padding:10px;display:grid;gap:6px">
+          ${teams.map(t => `
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:9px;transition:border-color .15s" onmouseover="this.style.borderColor='rgba(0,212,255,.2)'" onmouseout="this.style.borderColor='var(--border)'">
+            ${orgAvatar(t.name, 30, '8px')}
+            <div style="flex:1;min-width:0">
+              <div style="font-weight:600;font-size:13px">${esc(t.name)}</div>
+              ${t.description ? `<div style="font-size:11px;color:var(--muted);margin-top:1px">${esc(t.description)}</div>` : ''}
+            </div>
+            <button class="btn btn-ghost btn-sm" style="font-size:11px" onclick="app.showTeamMembers('${org.id}','${t.id}','${esc(t.name)}')">Members</button>
+            <button class="btn btn-ghost btn-sm" style="color:var(--red);font-size:11px" onclick="app.deleteTeam('${org.id}','${t.id}','${esc(t.name)}')">Delete</button>
+          </div>`).join('')}
+        </div>` : `
+        <div style="padding:36px 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.7">
+          No teams yet.<br>
+          <span style="font-size:12px;opacity:.7">Create one manually or they'll sync automatically from your OIDC provider groups.</span>
+        </div>`}
+      </div>
+
     </div>`;
   } catch(e) {
     el.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
@@ -627,15 +974,215 @@ async function showTemplateModal(template) {
   </div>`);
 }
 
+// ─── Org/Team modals ─────────────────────────────────────────────────────────
+
+function showCreateOrgModal() {
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal-overlay" id="create-org-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>New organization</h2>
+        <button class="btn-icon" onclick="document.getElementById('create-org-modal').remove()">✕</button>
+      </div>
+      <div class="field"><label>Name</label>
+        <input id="org-name" type="text" placeholder="Acme Corp" autofocus /></div>
+      <div class="field"><label>Description <span style="color:var(--muted)">(optional)</span></label>
+        <input id="org-desc" type="text" placeholder="Our company" /></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-ghost" onclick="document.getElementById('create-org-modal').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="app.createOrg()">Create</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+function showAddOrgMemberModal(orgId) {
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal-overlay" id="add-member-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Add member</h2>
+        <button class="btn-icon" onclick="document.getElementById('add-member-modal').remove()">✕</button>
+      </div>
+      <div class="field"><label>Email</label>
+        <input id="member-email" type="email" placeholder="avinash@company.com" autofocus /></div>
+      <div class="field"><label>Role</label>
+        <select id="member-role">
+          <option value="member" selected>Member</option>
+          <option value="admin">Admin</option>
+          <option value="viewer">Viewer</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-ghost" onclick="document.getElementById('add-member-modal').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="app.addOrgMember('${orgId}')">Add</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+function showCreateTeamModal(orgId) {
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal-overlay" id="create-team-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>New team</h2>
+        <button class="btn-icon" onclick="document.getElementById('create-team-modal').remove()">✕</button>
+      </div>
+      <div class="field"><label>Name</label>
+        <input id="team-name" type="text" placeholder="Engineering" autofocus /></div>
+      <div class="field"><label>Description <span style="color:var(--muted)">(optional)</span></label>
+        <input id="team-desc" type="text" placeholder="Backend engineers" /></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+        <button class="btn btn-ghost" onclick="document.getElementById('create-team-modal').remove()">Cancel</button>
+        <button class="btn btn-primary" onclick="app.createTeam('${orgId}')">Create</button>
+      </div>
+    </div>
+  </div>`);
+}
+
+async function showTeamMembersModal(orgId, teamId, teamName) {
+  document.getElementById('team-members-modal')?.remove();
+  document.body.insertAdjacentHTML('beforeend', `
+  <div class="modal-overlay" id="team-members-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>👥 ${esc(teamName)}</h2>
+        <button class="btn-icon" onclick="document.getElementById('team-members-modal').remove()">✕</button>
+      </div>
+      <div id="team-members-list"><div style="color:var(--muted);font-size:13px">Loading…</div></div>
+      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;display:flex;gap:8px">
+        <input id="team-member-email" type="email" placeholder="email@company.com" style="flex:1" />
+        <button class="btn btn-primary btn-sm" onclick="app.addTeamMember('${orgId}','${teamId}')">Add</button>
+      </div>
+    </div>
+  </div>`);
+
+  const reload = async () => {
+    const members = await api.orgs.listTeamMembers(orgId, teamId);
+    document.getElementById('team-members-list').innerHTML = members?.length
+      ? `<table class="users-table"><thead><tr><th>Name</th><th>Email</th><th></th></tr></thead><tbody>
+          ${members.map(m => `<tr>
+            <td>${esc(m.user_name||'—')}</td>
+            <td style="font-family:var(--mono);font-size:13px">${esc(m.user_email||m.user_id)}</td>
+            <td style="text-align:right">
+              <button class="btn btn-ghost btn-sm" style="color:var(--danger)"
+                onclick="app.removeTeamMember('${orgId}','${teamId}','${m.user_id}')">Remove</button>
+            </td>
+          </tr>`).join('')}
+        </tbody></table>`
+      : `<div style="color:var(--muted);font-size:13px;text-align:center;padding:16px">No members yet</div>`;
+    window._reloadTeamMembers = reload;
+  };
+  await reload();
+}
+
 // ─── Main app object ──────────────────────────────────────────────────────────
 window.app = {
   setView(v) {
     state.view = v;
     renderShell();
-    if      (v === 'igloos')    renderIgloosView();
-    else if (v === 'templates') renderTemplatesView();
-    else if (v === 'settings')  renderSettingsView();
-    else if (v === 'users')     renderUsersView();
+    if      (v === 'igloos')     renderIgloosView();
+    else if (v === 'templates')  renderTemplatesView();
+    else if (v === 'settings')   renderSettingsView();
+    else if (v === 'users')      renderUsersView();
+    else if (v === 'orgs')       renderOrgsView();
+    else if (v === 'org-detail') renderOrgDetailView();
+  },
+
+  openOrg(id) {
+    state.currentOrg = state.orgs.find(o => o.id === id) || { id };
+    this.setView('org-detail');
+  },
+
+  showCreateOrg() { showCreateOrgModal(); },
+
+  async createOrg() {
+    const name = document.getElementById('org-name')?.value?.trim();
+    if (!name) { toast('Enter an organization name', 'error'); return; }
+    const desc = document.getElementById('org-desc')?.value?.trim();
+    try {
+      const org = await api.orgs.create({ name, description: desc });
+      state.orgs.push(org);
+      document.getElementById('create-org-modal')?.remove();
+      state.currentOrg = org;
+      this.setView('org-detail');
+      toast(`Organization "${org.name}" created`, 'success');
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  showAddOrgMember(orgId) { showAddOrgMemberModal(orgId); },
+
+  async addOrgMember(orgId) {
+    const email = document.getElementById('member-email')?.value?.trim();
+    const role  = document.getElementById('member-role')?.value;
+    if (!email) { toast('Enter an email', 'error'); return; }
+    try {
+      await api.orgs.addMember(orgId, { email, role });
+      document.getElementById('add-member-modal')?.remove();
+      toast('Member added', 'success');
+      renderOrgDetailView();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  async updateOrgMemberRole(orgId, userId, role) {
+    try {
+      await api.orgs.updateMember(orgId, userId, { role });
+      toast('Role updated', 'success');
+    } catch(e) { toast(e.message, 'error'); renderOrgDetailView(); }
+  },
+
+  async removeOrgMember(orgId, userId, email) {
+    if (!confirm(`Remove ${email || userId} from this organization?`)) return;
+    try {
+      await api.orgs.removeMember(orgId, userId);
+      toast('Member removed');
+      renderOrgDetailView();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  showCreateTeam(orgId) { showCreateTeamModal(orgId); },
+
+  async createTeam(orgId) {
+    const name = document.getElementById('team-name')?.value?.trim();
+    if (!name) { toast('Enter a team name', 'error'); return; }
+    const desc = document.getElementById('team-desc')?.value?.trim();
+    try {
+      await api.orgs.createTeam(orgId, { name, description: desc });
+      document.getElementById('create-team-modal')?.remove();
+      toast(`Team "${name}" created`, 'success');
+      renderOrgDetailView();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  async deleteTeam(orgId, teamId, name) {
+    if (!confirm(`Delete team "${name}"?`)) return;
+    try {
+      await api.orgs.deleteTeam(orgId, teamId);
+      toast('Team deleted');
+      renderOrgDetailView();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  showTeamMembers(orgId, teamId, name) { showTeamMembersModal(orgId, teamId, name); },
+
+  async addTeamMember(orgId, teamId) {
+    const email = document.getElementById('team-member-email')?.value?.trim();
+    if (!email) { toast('Enter an email', 'error'); return; }
+    try {
+      await api.orgs.addTeamMember(orgId, teamId, { email });
+      document.getElementById('team-member-email').value = '';
+      toast('Member added to team', 'success');
+      if (window._reloadTeamMembers) await window._reloadTeamMembers();
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  async removeTeamMember(orgId, teamId, userId) {
+    try {
+      await api.orgs.removeTeamMember(orgId, teamId, userId);
+      toast('Removed from team');
+      if (window._reloadTeamMembers) await window._reloadTeamMembers();
+    } catch(e) { toast(e.message, 'error'); }
   },
 
   showNewIgloo() { showNewIglooModal(); },
@@ -835,6 +1382,44 @@ window.app = {
     } catch(e) { toast('Failed: ' + e.message, 'error'); }
   },
 
+  async saveTailscaleKey() {
+    const key = document.getElementById('tailscale-key-input').value.trim();
+    try {
+      const user = await api.auth.saveTailscaleKey(key);
+      state.user = user;
+      renderSettingsView();
+      toast('Tailscale key saved — next igloo wake will join your Tailnet', 'success');
+    } catch(e) { toast('Failed: ' + e.message, 'error'); }
+  },
+
+  async clearTailscaleKey() {
+    try {
+      const user = await api.auth.saveTailscaleKey('');
+      state.user = user;
+      renderSettingsView();
+      toast('Tailscale key cleared');
+    } catch(e) { toast('Failed: ' + e.message, 'error'); }
+  },
+
+  async savePlatformTailscale() {
+    const apiKey  = document.getElementById('ts-api-key').value.trim();
+    const tailnet = document.getElementById('ts-tailnet').value.trim();
+    try {
+      await api.platformConfig.save({ tailscale_api_key: apiKey, tailscale_tailnet: tailnet });
+      toast('Tailscale integration saved — workspaces will auto-join your Tailnet on next wake', 'success');
+      renderIntegrationsView();
+    } catch(e) { toast('Failed: ' + e.message, 'error'); }
+  },
+
+  async clearPlatformTailscale() {
+    if (!confirm('Disconnect Tailscale? Workspaces will no longer auto-join your Tailnet.')) return;
+    try {
+      await api.platformConfig.save({ tailscale_api_key: '', tailscale_tailnet: '' });
+      toast('Tailscale disconnected');
+      renderIntegrationsView();
+    } catch(e) { toast('Failed: ' + e.message, 'error'); }
+  },
+
   logout() {
     localStorage.removeItem('igloo_token');
     state.user = null;
@@ -844,32 +1429,6 @@ window.app = {
 };
 
 // ─── Auth pages ───────────────────────────────────────────────────────────────
-function renderLogin(errorMsg) {
-  document.getElementById('root').innerHTML = `
-  <div class="auth-page">
-    <div class="auth-logo">
-      <div class="auth-logo-icon">${icon.logo}</div>
-      igloo
-    </div>
-    <div class="auth-card">
-      <h1>Welcome back</h1>
-      <p>Sign in to your account to continue.</p>
-      ${errorMsg ? `<div class="auth-error visible">${esc(errorMsg)}</div>` : '<div class="auth-error" id="auth-err"></div>'}
-      <div class="field">
-        <label>Email</label>
-        <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <input id="password" type="password" placeholder="••••••••" autocomplete="current-password"
-               onkeydown="if(event.key==='Enter')handleLogin()" />
-      </div>
-      <button class="btn btn-primary" onclick="handleLogin()" id="login-btn">Sign in</button>
-      <div class="auth-footer">Don't have an account? <a href="#" onclick="renderRegister()">Create one →</a></div>
-    </div>
-  </div>`;
-  document.getElementById('email')?.focus();
-}
 
 function renderRegister() {
   document.getElementById('root').innerHTML = `
@@ -980,7 +1539,81 @@ async function boot() {
   }, 5000);
 }
 
+// ─── OIDC callback: pick up ?token= or ?oidc_error= from the URL ────────────
+(function handleOIDCRedirect() {
+  const params = new URLSearchParams(window.location.search);
+  const tok = params.get('token');
+  const err = params.get('oidc_error');
+  if (tok) {
+    localStorage.setItem('igloo_token', tok);
+    // Clean URL so a refresh doesn't re-process the token.
+    history.replaceState({}, '', '/');
+  }
+  if (err) {
+    // Stash so renderLogin can display it.
+    window.__oidcError = decodeURIComponent(err);
+    history.replaceState({}, '', '/');
+  }
+})();
+
+// Cache of /api/auth/config response
+let _authConfig = null;
+async function getAuthConfig() {
+  if (!_authConfig) {
+    try {
+      const res = await fetch('/api/auth/config');
+      _authConfig = await res.json();
+    } catch { _authConfig = { password_auth_enabled: true, oidc_enabled: false }; }
+  }
+  return _authConfig;
+}
+
+function renderLogin(errorMsg) {
+  const err = errorMsg || window.__oidcError || '';
+  window.__oidcError = null;
+  getAuthConfig().then(cfg => {
+    const oidcBtn = cfg.oidc_enabled ? `
+      <a href="/api/auth/oidc/login" class="btn btn-secondary" style="display:flex;align-items:center;gap:8px;justify-content:center;text-decoration:none;margin-bottom:12px;">
+        ${cfg.oidc_icon_url ? `<img src="${esc(cfg.oidc_icon_url)}" style="height:18px">` : ''}
+        ${esc(cfg.oidc_button_text || 'Sign in with SSO')}
+      </a>` : '';
+    const divider = cfg.oidc_enabled && cfg.password_auth_enabled ? `
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 12px;color:var(--muted);font-size:12px">
+        <div style="flex:1;height:1px;background:var(--border)"></div>or<div style="flex:1;height:1px;background:var(--border)"></div>
+      </div>` : '';
+    const pwFields = cfg.password_auth_enabled ? `
+      <div class="field">
+        <label>Email</label>
+        <input id="email" type="email" placeholder="you@example.com" autocomplete="email" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input id="password" type="password" placeholder="••••••••" autocomplete="current-password"
+               onkeydown="if(event.key==='Enter')handleLogin()" />
+      </div>
+      <button class="btn btn-primary" onclick="handleLogin()" id="login-btn">Sign in</button>
+      <div class="auth-footer">Don't have an account? <a href="#" onclick="renderRegister()">Create one →</a></div>` : '';
+    document.getElementById('root').innerHTML = `
+    <div class="auth-page">
+      <div class="auth-logo">
+        <div class="auth-logo-icon">${icon.logo}</div>
+        igloo
+      </div>
+      <div class="auth-card">
+        <h1>Welcome back</h1>
+        <p>Sign in to your account to continue.</p>
+        ${err ? `<div class="auth-error visible">${esc(err)}</div>` : '<div class="auth-error" id="auth-err"></div>'}
+        ${oidcBtn}
+        ${divider}
+        ${pwFields}
+      </div>
+    </div>`;
+    document.getElementById('email')?.focus();
+  });
+}
+
 async function init() {
+  // Pick up token from OIDC redirect (already stored by handleOIDCRedirect above).
   const token = localStorage.getItem('igloo_token');
   if (!token) { renderLogin(); return; }
   try {

@@ -7,13 +7,20 @@ import (
 	"github.com/igloo-dev/igloo/internal/auth"
 	"github.com/igloo-dev/igloo/internal/relay"
 	"github.com/igloo-dev/igloo/internal/store"
+	"github.com/igloo-dev/igloo/internal/tailnet"
 )
 
 type Handler struct {
-	Store    store.Store
-	Auth     *auth.Auth
-	Relay    *relay.Relay
-	Registry *ProvisionerRegistry // parked acquire tokens from daemon WS connections
+	Store       store.Store
+	Auth        *auth.Auth
+	Relay       *relay.Relay
+	Registry    *ProvisionerRegistry // parked acquire tokens from daemon WS connections
+	LogBuf      *LogBuffer           // live provisioner log lines per workspace
+	Coordinator *tailnet.Coordinator // built-in WireGuard coordination (no Tailscale needed)
+
+	// OIDC — nil when not configured
+	OIDC                *auth.OIDCProvider
+	DisablePasswordAuth bool // when true, /login and /register return 403
 }
 
 func (h *Handler) json(w http.ResponseWriter, status int, v any) {

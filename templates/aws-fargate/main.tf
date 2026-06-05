@@ -1,3 +1,12 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
 provider "aws" {
   region = var.region
 }
@@ -22,9 +31,12 @@ resource "aws_ecs_task_definition" "workspace" {
     essential = true
 
     environment = [
-      { name = "IGLOO_SERVER_URL",  value = var.server_url },
-      { name = "IGLOO_AGENT_TOKEN", value = var.agent_token },
-      { name = "IGLOO_SSH_KEY",     value = var.ssh_public_key },
+      { name = "IGLOO_SERVER_URL",    value = var.server_url },
+      { name = "IGLOO_AGENT_TOKEN",   value = var.agent_token },
+      { name = "IGLOO_SSH_KEY",       value = var.ssh_public_key },
+      { name = "IGLOO_WORKSPACE_ID",  value = var.workspace_id },
+      { name = "TAILSCALE_AUTH_KEY",  value = var.tailscale_auth_key },
+      { name = "TAILSCALE_HOSTNAME",  value = var.tailscale_hostname },
     ]
 
     linuxParameters = { initProcessEnabled = true }

@@ -44,7 +44,8 @@ type userItem struct {
 	Email        string    `dynamodbav:"email"`
 	Name         string    `dynamodbav:"name"`
 	PasswordHash string    `dynamodbav:"password_hash"`
-	SSHPublicKey string    `dynamodbav:"ssh_public_key"`
+	SSHPublicKey     string `dynamodbav:"ssh_public_key"`
+	TailscaleAuthKey string `dynamodbav:"tailscale_auth_key"`
 	IsAdmin      bool      `dynamodbav:"is_admin"`
 	CreatedAt    time.Time `dynamodbav:"created_at"`
 }
@@ -79,10 +80,10 @@ type templateItem struct {
 }
 
 func userToItem(u *models.User) userItem {
-	return userItem{ID: u.ID, Email: u.Email, Name: u.Name, PasswordHash: u.PasswordHash, SSHPublicKey: u.SSHPublicKey, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt}
+	return userItem{ID: u.ID, Email: u.Email, Name: u.Name, PasswordHash: u.PasswordHash, SSHPublicKey: u.SSHPublicKey, TailscaleAuthKey: u.TailscaleAuthKey, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt}
 }
 func itemToUser(i userItem) *models.User {
-	return &models.User{ID: i.ID, Email: i.Email, Name: i.Name, PasswordHash: i.PasswordHash, SSHPublicKey: i.SSHPublicKey, IsAdmin: i.IsAdmin, CreatedAt: i.CreatedAt}
+	return &models.User{ID: i.ID, Email: i.Email, Name: i.Name, PasswordHash: i.PasswordHash, SSHPublicKey: i.SSHPublicKey, TailscaleAuthKey: i.TailscaleAuthKey, IsAdmin: i.IsAdmin, CreatedAt: i.CreatedAt}
 }
 
 func wsToItem(ws *models.Workspace) workspaceItem {
@@ -191,7 +192,13 @@ func (d *DynamoStore) UpdateUser(ctx context.Context, u *models.User) error {
 }
 
 func (d *DynamoStore) ListUsers(ctx context.Context) ([]*models.User, error) {
-	out, err := d.client.Scan(ctx, &dynamodb.ScanInput{TableName: &d.users})
+	out, err := d.client.Scan(ctx, &dynamodb.ScanInput{
+		TableName:        &d.users,
+		FilterExpression: aws.String("id <> :platform"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":platform": &types.AttributeValueMemberS{Value: "__platform__"},
+		},
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -641,6 +648,52 @@ func (d *DynamoStore) DeleteProvisionerKey(ctx context.Context, id string) error
 	return err
 }
 
+// ─── PlatformConfig ───────────────────────────────────────────────────────────
+// Stored as a single item in the users table with the reserved ID "__platform__".
+
+type platformItem struct {
+	ID               string `dynamodbav:"id"`
+	TailscaleAPIKey  string `dynamodbav:"tailscale_api_key"`
+	TailscaleTailnet string `dynamodbav:"tailscale_tailnet"`
+}
+
+func (d *DynamoStore) GetPlatformConfig(ctx context.Context) (*models.PlatformConfig, error) {
+	out, err := d.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &d.users,
+		Key:       strKey("id", "__platform__"),
+	})
+	if err != nil {
+		return &models.PlatformConfig{}, nil
+	}
+	if out.Item == nil {
+		return &models.PlatformConfig{}, nil
+	}
+	var item platformItem
+	if err := attributevalue.UnmarshalMap(out.Item, &item); err != nil {
+		return &models.PlatformConfig{}, nil
+	}
+	return &models.PlatformConfig{
+		TailscaleAPIKey:  item.TailscaleAPIKey,
+		TailscaleTailnet: item.TailscaleTailnet,
+	}, nil
+}
+
+func (d *DynamoStore) SavePlatformConfig(ctx context.Context, cfg *models.PlatformConfig) error {
+	item, err := attributevalue.MarshalMap(platformItem{
+		ID:               "__platform__",
+		TailscaleAPIKey:  cfg.TailscaleAPIKey,
+		TailscaleTailnet: cfg.TailscaleTailnet,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = d.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: &d.users,
+		Item:      item,
+	})
+	return err
+}
+
 func (d *DynamoStore) TouchProvisionerKey(ctx context.Context, id string) error {
 	now := time.Now()
 	nowStr := now.Format(time.RFC3339)
@@ -656,3 +709,33 @@ func (d *DynamoStore) TouchProvisionerKey(ctx context.Context, id string) error 
 	})
 	return err
 }
+
+// ─── Organizations & Teams (DynamoDB — not yet implemented) ──────────────────
+// These are no-ops that satisfy the Store interface. Full DynamoDB
+// implementations will be added when multi-tenant cloud support is needed.
+
+func (d *DynamoStore) CreateOrg(_ context.Context, o *models.Organization) error { return ErrNotFound }
+func (d *DynamoStore) GetOrg(_ context.Context, id string) (*models.Organization, error) { return nil, ErrNotFound }
+func (d *DynamoStore) GetOrgBySlug(_ context.Context, slug string) (*models.Organization, error) { return nil, ErrNotFound }
+func (d *DynamoStore) ListOrgs(_ context.Context) ([]*models.Organization, error) { return nil, nil }
+func (d *DynamoStore) UpdateOrg(_ context.Context, o *models.Organization) error { return ErrNotFound }
+func (d *DynamoStore) DeleteOrg(_ context.Context, id string) error { return ErrNotFound }
+
+func (d *DynamoStore) AddOrgMember(_ context.Context, m *models.OrgMember) error { return ErrNotFound }
+func (d *DynamoStore) GetOrgMember(_ context.Context, orgID, userID string) (*models.OrgMember, error) { return nil, ErrNotFound }
+func (d *DynamoStore) ListOrgMembers(_ context.Context, orgID string) ([]*models.OrgMember, error) { return nil, nil }
+func (d *DynamoStore) ListUserOrgs(_ context.Context, userID string) ([]*models.OrgMember, error) { return nil, nil }
+func (d *DynamoStore) UpdateOrgMember(_ context.Context, m *models.OrgMember) error { return ErrNotFound }
+func (d *DynamoStore) RemoveOrgMember(_ context.Context, orgID, userID string) error { return ErrNotFound }
+
+func (d *DynamoStore) CreateTeam(_ context.Context, t *models.Team) error { return ErrNotFound }
+func (d *DynamoStore) GetTeam(_ context.Context, id string) (*models.Team, error) { return nil, ErrNotFound }
+func (d *DynamoStore) ListTeams(_ context.Context, orgID string) ([]*models.Team, error) { return nil, nil }
+func (d *DynamoStore) UpdateTeam(_ context.Context, t *models.Team) error { return ErrNotFound }
+func (d *DynamoStore) DeleteTeam(_ context.Context, id string) error { return ErrNotFound }
+
+func (d *DynamoStore) AddTeamMember(_ context.Context, m *models.TeamMember) error { return ErrNotFound }
+func (d *DynamoStore) ListTeamMembers(_ context.Context, teamID string) ([]*models.TeamMember, error) { return nil, nil }
+func (d *DynamoStore) ListUserTeams(_ context.Context, userID string) ([]*models.TeamMember, error) { return nil, nil }
+func (d *DynamoStore) RemoveTeamMember(_ context.Context, teamID, userID string) error { return ErrNotFound }
+func (d *DynamoStore) SyncTeamMembers(_ context.Context, teamID string, userIDs []string) error { return ErrNotFound }

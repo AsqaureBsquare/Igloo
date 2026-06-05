@@ -82,3 +82,16 @@ variable "workspace_image" {
   description = "ECR image URI for the workspace container"
   type        = string
 }
+
+variable "tailscale_auth_key" {
+  description = "Tailscale one-time auth key — workspace joins the tailnet on boot"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "tailscale_hostname" {
+  description = "Tailscale device hostname (e.g. igloo-my-workspace)"
+  type        = string
+  default     = ""
+}

@@ -1,0 +1,1154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Igloo — Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root {
+    --bg:        #0d1117;
+    --bg2:       #161b22;
+    --bg3:       #21262d;
+    --border:    #30363d;
+    --border2:   #3d444d;
+    --text:      #e6edf3;
+    --muted:     #8b949e;
+    --orange:    #ff9900;
+    --orange2:   #e68a00;
+    --green:     #3fb950;
+    --blue:      #388bfd;
+    --purple:    #bc8cff;
+    --red:       #f85149;
+    --yellow:    #d29922;
+    --teal:      #39d353;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    font-size: 14px;
+  }
+
+  a { color: var(--blue); text-decoration: none; }
+
+  /* ── Header ─────────────────────────────────────── */
+  header {
+    text-align: center;
+    padding: 64px 24px 48px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    overflow: hidden;
+  }
+  header::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 80% 50% at 50% 0%, rgba(255,153,0,.12), transparent);
+    pointer-events: none;
+  }
+  .logo {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--orange);
+    margin-bottom: 12px;
+  }
+  h1 {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -.5px;
+    background: linear-gradient(135deg, #fff 0%, var(--muted) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 16px;
+  }
+  header p {
+    color: var(--muted);
+    font-size: 16px;
+    max-width: 560px;
+    margin: 0 auto;
+  }
+
+  /* ── Layout ─────────────────────────────────────── */
+  main { max-width: 1200px; margin: 0 auto; padding: 0 24px 96px; }
+
+  section { margin-top: 72px; }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--orange);
+    margin-bottom: 8px;
+  }
+  .section-title {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -.3px;
+    margin-bottom: 8px;
+  }
+  .section-desc {
+    color: var(--muted);
+    font-size: 14px;
+    max-width: 640px;
+    margin-bottom: 36px;
+  }
+
+  /* ── Cards ───────────────────────────────────────── */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  /* ── Main Architecture Diagram ───────────────────── */
+  .arch-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+  }
+
+  .arch-layer {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 16px;
+    position: relative;
+  }
+  .arch-layer.highlight {
+    border-color: var(--orange);
+    background: linear-gradient(180deg, rgba(255,153,0,.06) 0%, var(--bg2) 100%);
+  }
+  .arch-layer.blue {
+    border-color: var(--blue);
+    background: linear-gradient(180deg, rgba(56,139,253,.06) 0%, var(--bg2) 100%);
+  }
+  .arch-layer.green {
+    border-color: var(--green);
+    background: linear-gradient(180deg, rgba(63,185,80,.06) 0%, var(--bg2) 100%);
+  }
+  .arch-layer.purple {
+    border-color: var(--purple);
+    background: linear-gradient(180deg, rgba(188,140,255,.06) 0%, var(--bg2) 100%);
+  }
+
+  .layer-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .layer-title .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .dot-orange { background: var(--orange); }
+  .dot-blue   { background: var(--blue); }
+  .dot-green  { background: var(--green); }
+  .dot-purple { background: var(--purple); }
+
+  .component {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    margin-bottom: 8px;
+    transition: border-color .15s;
+  }
+  .component:last-child { margin-bottom: 0; }
+  .component:hover { border-color: var(--border2); }
+  .component-icon {
+    font-size: 18px;
+    line-height: 1;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .component-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+  }
+  .component-desc {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .tag-orange { background: rgba(255,153,0,.15); color: var(--orange); }
+  .tag-blue   { background: rgba(56,139,253,.15); color: var(--blue); }
+  .tag-green  { background: rgba(63,185,80,.15); color: var(--green); }
+  .tag-purple { background: rgba(188,140,255,.15); color: var(--purple); }
+  .tag-red    { background: rgba(248,81,73,.15); color: var(--red); }
+
+  /* ── Full-width layer (client + storage rows) ────── */
+  .arch-row {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 16px;
+  }
+  .arch-row .layer-title { margin-bottom: 14px; }
+  .components-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .components-row .component { flex: 1; min-width: 180px; margin-bottom: 0; }
+
+  /* ── Connector arrows ────────────────────────────── */
+  .connector {
+    text-align: center;
+    color: var(--border2);
+    font-size: 20px;
+    margin: 4px 0;
+    position: relative;
+  }
+  .connector-label {
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+    background: var(--bg);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  /* ── Flow diagram ─────────────────────────────────── */
+  .flow-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 24px;
+  }
+
+  .flow-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .flow-header {
+    padding: 16px 20px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .flow-icon { font-size: 20px; }
+  .flow-title { font-size: 14px; font-weight: 600; }
+  .flow-subtitle { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .flow-steps { padding: 16px 20px; }
+  .flow-step {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+    align-items: flex-start;
+  }
+  .flow-step:last-child { margin-bottom: 0; }
+  .step-num {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--bg3);
+    border: 1px solid var(--border2);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .step-text { font-size: 12.5px; color: var(--text); line-height: 1.5; }
+  .step-text code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--orange);
+  }
+  .step-arrow {
+    text-align: left;
+    padding-left: 34px;
+    color: var(--border2);
+    font-size: 13px;
+    margin: -6px 0 6px;
+  }
+
+  /* ── Sleep/Wake lifecycle ─────────────────────────── */
+  .lifecycle {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .lc-phase {
+    flex: 1;
+    padding: 24px 20px;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    position: relative;
+  }
+  .lc-phase:last-child { border-right: none; }
+  .lc-phase.active { background: linear-gradient(180deg, rgba(63,185,80,.06) 0%, var(--bg2) 100%); }
+  .lc-phase.sleep  { background: linear-gradient(180deg, rgba(56,139,253,.06) 0%, var(--bg2) 100%); }
+  .lc-phase.wake   { background: linear-gradient(180deg, rgba(255,153,0,.06) 0%, var(--bg2) 100%); }
+  .lc-arrow {
+    position: absolute;
+    right: -20px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    background: var(--bg);
+    border: 1px solid var(--border2);
+    border-radius: 50%;
+    width: 28px; height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .lc-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .lc-title.green  { color: var(--green); }
+  .lc-title.blue   { color: var(--blue); }
+  .lc-title.orange { color: var(--orange); }
+  .lc-subtitle { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+  .lc-item {
+    font-size: 12px;
+    color: var(--text);
+    margin-bottom: 6px;
+    padding-left: 16px;
+    position: relative;
+  }
+  .lc-item::before {
+    content: '•';
+    position: absolute;
+    left: 0;
+    color: var(--muted);
+  }
+  .lc-cost {
+    margin-top: 16px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+  }
+  .lc-cost.green  { background: rgba(63,185,80,.12);  color: var(--green); }
+  .lc-cost.blue   { background: rgba(56,139,253,.12); color: var(--blue); }
+  .lc-cost.orange { background: rgba(255,153,0,.12);  color: var(--orange); }
+
+  /* ── Provisioning pipeline ────────────────────────── */
+  .pipeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    padding: 4px;
+  }
+  .pipe-step {
+    flex-shrink: 0;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    text-align: center;
+    min-width: 140px;
+  }
+  .pipe-step.trigger { border-color: var(--blue); background: rgba(56,139,253,.06); }
+  .pipe-step.queue   { border-color: var(--yellow); background: rgba(210,153,34,.06); }
+  .pipe-step.worker  { border-color: var(--orange); background: rgba(255,153,0,.06); }
+  .pipe-step.tf      { border-color: var(--purple); background: rgba(188,140,255,.06); }
+  .pipe-step.done    { border-color: var(--green); background: rgba(63,185,80,.06); }
+  .pipe-icon { font-size: 24px; margin-bottom: 8px; }
+  .pipe-name { font-size: 12px; font-weight: 600; margin-bottom: 4px; }
+  .pipe-detail { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .pipe-arrow {
+    flex-shrink: 0;
+    padding: 0 4px;
+    font-size: 20px;
+    color: var(--border2);
+  }
+
+  /* ── Tech stack ───────────────────────────────────── */
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .stack-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .stack-icon { font-size: 22px; margin-bottom: 8px; }
+  .stack-name { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .stack-role { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+  /* ── Cost table ───────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--bg3);
+  }
+  tr:last-child td { border-bottom: none; }
+  td:first-child { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--orange); }
+
+  /* ── Data model ───────────────────────────────────── */
+  .ddb-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .ddb-table {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .ddb-header {
+    padding: 10px 14px;
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .ddb-field {
+    padding: 6px 14px;
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .ddb-field:last-child { border-bottom: none; }
+  .ddb-field .pk { color: var(--orange); font-weight: 600; }
+  .ddb-field .gsi { color: var(--blue); font-weight: 600; }
+
+  /* ── Footer ───────────────────────────────────────── */
+  footer {
+    text-align: center;
+    padding: 32px 24px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* ── Responsive ───────────────────────────────────── */
+  @media (max-width: 900px) {
+    .arch-grid, .flow-grid, .stack-grid, .ddb-grid { grid-template-columns: 1fr 1fr; }
+    .lifecycle { flex-direction: column; }
+    .lc-phase { border-right: none; border-bottom: 1px solid var(--border); }
+    .lc-arrow { display: none; }
+    .pipeline { flex-direction: column; align-items: stretch; }
+    .pipe-arrow { transform: rotate(90deg); text-align: center; }
+  }
+  @media (max-width: 600px) {
+    .arch-grid, .flow-grid, .stack-grid, .ddb-grid { grid-template-columns: 1fr; }
+    h1 { font-size: 28px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">🧊 Igloo Platform</div>
+  <h1>Architecture Overview</h1>
+  <p>Serverless dev workspaces that sleep to $0 and wake in ~15 seconds — with persistent EBS disks, browser terminal, VS Code, and SSH.</p>
+</header>
+
+<main>
+
+  <!-- ── 1. System Overview ─────────────────────────── -->
+  <section>
+    <div class="section-label">Section 01</div>
+    <div class="section-title">System Overview</div>
+    <div class="section-desc">Every component and where it runs. The control plane (API + Provisioner) lives on ECS Fargate. Each workspace is its own Fargate task with a dedicated EBS volume.</div>
+
+    <!-- Client row -->
+    <div class="arch-row">
+      <div class="layer-title"><span class="dot dot-blue"></span>Developer Clients</div>
+      <div class="components-row">
+        <div class="component">
+          <div class="component-icon">🌐</div>
+          <div>
+            <div class="component-name">Browser</div>
+            <div class="component-desc">xterm.js terminal, VS Code proxy, workspace dashboard</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">💻</div>
+          <div>
+            <div class="component-name">igloo CLI</div>
+            <div class="component-desc"><code style="font-family:monospace;font-size:11px;color:var(--orange)">igloo proxy &lt;name&gt;</code> — SSH ProxyCommand over WebSocket</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">🔑</div>
+          <div>
+            <div class="component-name">SSH Client</div>
+            <div class="component-desc">Native SSH via <code style="font-family:monospace;font-size:11px;color:var(--orange)">~/.ssh/config</code> ProxyCommand hook</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector">↓ <span class="connector-label">HTTPS / WSS</span> ↓</div>
+
+    <!-- ALB row -->
+    <div class="arch-row" style="border-color: var(--orange); background: linear-gradient(180deg, rgba(255,153,0,.04) 0%, var(--bg2) 100%);">
+      <div class="layer-title"><span class="dot dot-orange"></span>Ingress</div>
+      <div class="components-row">
+        <div class="component" style="flex:none;min-width:auto;">
+          <div class="component-icon">⚖️</div>
+          <div>
+            <div class="component-name">Application Load Balancer <span class="tag tag-orange">AWS ALB</span></div>
+            <div class="component-desc">Single entry point for all HTTP + WebSocket traffic. No inbound ports needed on containers.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector">↓ <span class="connector-label">HTTP / WS forward</span> ↓</div>
+
+    <!-- Control plane -->
+    <div class="arch-grid">
+      <div class="arch-layer highlight">
+        <div class="layer-title"><span class="dot dot-orange"></span>API Server <span class="tag tag-orange">ECS</span></div>
+        <div class="component">
+          <div class="component-icon">🚀</div>
+          <div>
+            <div class="component-name">igloo-server</div>
+            <div class="component-desc">REST API, auth, WebSocket relay, VS Code proxy, SSH tunnel</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">🔁</div>
+          <div>
+            <div class="component-name">In-Memory Relay</div>
+            <div class="component-desc">Stitches browser/CLI WebSocket to workspace agent. No Redis needed.</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">👷</div>
+          <div>
+            <div class="component-name">Embedded Worker</div>
+            <div class="component-desc">1 job worker — local dev fallback. Production uses the provisioner service.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arch-layer" style="border-color:var(--yellow); background: linear-gradient(180deg, rgba(210,153,34,.06) 0%, var(--bg2) 100%);">
+        <div class="layer-title"><span class="dot" style="background:var(--yellow)"></span>Provisioner <span class="tag" style="background:rgba(210,153,34,.15);color:var(--yellow)">ECS</span></div>
+        <div class="component">
+          <div class="component-icon">⚙️</div>
+          <div>
+            <div class="component-name">igloo-provisioner</div>
+            <div class="component-desc">Standalone service — 10 concurrent workers. Scales independently.</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">🏎️</div>
+          <div>
+            <div class="component-name">Pre-baked Terraform</div>
+            <div class="component-desc">AWS provider cached in image — eliminates 60–90s download per workspace op.</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">🔒</div>
+          <div>
+            <div class="component-name">In-flight Lock</div>
+            <div class="component-desc"><code style="font-family:monospace;font-size:11px;color:var(--orange)">sync.Map</code> prevents concurrent terraform on same workspace.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="arch-layer green">
+        <div class="layer-title"><span class="dot dot-green"></span>Workspace Container <span class="tag tag-green">ECS / Fargate</span></div>
+        <div class="component">
+          <div class="component-icon">🤖</div>
+          <div>
+            <div class="component-name">igloo-agent</div>
+            <div class="component-desc">Dials outbound WebSocket. Handles PTY, TCP-forward, HTTP-proxy.</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">🔐</div>
+          <div>
+            <div class="component-name">sshd (port 22)</div>
+            <div class="component-desc">Key-auth only. Authorized keys written from profile at boot.</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">💻</div>
+          <div>
+            <div class="component-name">code-server (13131)</div>
+            <div class="component-desc">VS Code in browser. Proxied by server — no public port needed.</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">💾</div>
+          <div>
+            <div class="component-name">EBS Volume</div>
+            <div class="component-desc"><code style="font-family:monospace;font-size:11px;color:var(--orange)">/workspace</code> — survives sleep/wake. <code style="font-family:monospace;font-size:11px;color:var(--orange)">deleteOnTermination: false</code></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector" style="margin-top:16px">↓ <span class="connector-label">DynamoDB SDK + S3 Terraform backend</span> ↓</div>
+
+    <!-- Storage row -->
+    <div class="arch-row" style="margin-top:0">
+      <div class="layer-title"><span class="dot dot-purple"></span>Storage Layer <span class="tag tag-purple">AWS</span></div>
+      <div class="components-row">
+        <div class="component">
+          <div class="component-icon">🗄️</div>
+          <div>
+            <div class="component-name">DynamoDB <span class="tag tag-purple">4 tables</span></div>
+            <div class="component-desc">Users, Workspaces, Templates, Jobs — single-digit ms latency</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">🪣</div>
+          <div>
+            <div class="component-name">S3 <span class="tag tag-blue">Terraform State</span></div>
+            <div class="component-desc">One S3 key per workspace: <code style="font-family:monospace;font-size:11px;color:var(--orange)">workspaces/{id}/terraform.tfstate</code></div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">📦</div>
+          <div>
+            <div class="component-name">ECR <span class="tag tag-orange">3 repos</span></div>
+            <div class="component-desc">igloo-server, igloo-workspace, igloo-provisioner</div>
+          </div>
+        </div>
+        <div class="component">
+          <div class="component-icon">📋</div>
+          <div>
+            <div class="component-name">CloudWatch Logs</div>
+            <div class="component-desc">Server, provisioner, workspace container logs — 3–7 day retention</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 2. Connectivity Flows ──────────────────────── -->
+  <section>
+    <div class="section-label">Section 02</div>
+    <div class="section-title">How Remote Dev Works</div>
+    <div class="section-desc">Three connectivity modes — all outbound from the container, all through a single ALB endpoint. No inbound firewall rules, no VPN, no bastion host.</div>
+
+    <div class="flow-grid">
+
+      <!-- SSH -->
+      <div class="flow-card">
+        <div class="flow-header" style="border-left: 3px solid var(--blue);">
+          <div class="flow-icon">🔑</div>
+          <div>
+            <div class="flow-title">SSH Terminal</div>
+            <div class="flow-subtitle">Native SSH via WebSocket tunnel</div>
+          </div>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="step-num">1</div>
+            <div class="step-text"><code>ssh igloo-akhila</code> — SSH calls ProxyCommand: <code>igloo proxy akhila</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">2</div>
+            <div class="step-text">CLI resolves name → workspace ID, fetches short-lived <strong>forward token</strong> from API</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">3</div>
+            <div class="step-text">CLI dials <code>ws://alb/api/workspaces/{id}/forward?port=22</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">4</div>
+            <div class="step-text">Server sends <code>tcp_open</code> to agent via relay</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">5</div>
+            <div class="step-text">Agent dials <code>127.0.0.1:22</code> (sshd), sends <code>tcp_ready</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">6</div>
+            <div class="step-text">Bidirectional TCP ↔ WebSocket relay. SSH key auth, full native SSH.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Browser Terminal -->
+      <div class="flow-card">
+        <div class="flow-header" style="border-left: 3px solid var(--green);">
+          <div class="flow-icon">🖥️</div>
+          <div>
+            <div class="flow-title">Browser Terminal</div>
+            <div class="flow-subtitle">xterm.js PTY over WebSocket</div>
+          </div>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="step-num">1</div>
+            <div class="step-text">Browser clicks Terminal — API issues a short-lived <strong>terminal token</strong> (role: browser)</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">2</div>
+            <div class="step-text">Browser connects <code>ws://alb/ws?token=...</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">3</div>
+            <div class="step-text">Browser sends <code>pty_spawn</code> with cols/rows — relayed to agent</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">4</div>
+            <div class="step-text">Agent forks bash with PTY, sends <code>pty_ready</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">5</div>
+            <div class="step-text">Keystroke → <code>pty_data</code> → agent writes to PTY stdin</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">6</div>
+            <div class="step-text">PTY stdout → <code>pty_output</code> → relay → xterm.js renders output</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- VS Code -->
+      <div class="flow-card">
+        <div class="flow-header" style="border-left: 3px solid var(--purple);">
+          <div class="flow-icon">💻</div>
+          <div>
+            <div class="flow-title">VS Code in Browser</div>
+            <div class="flow-subtitle">HTTP + WebSocket proxy to code-server</div>
+          </div>
+        </div>
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="step-num">1</div>
+            <div class="step-text">Browser navigates to <code>/proxy/{id}/</code> — proxy middleware validates cookie token</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">2</div>
+            <div class="step-text">Server sends <code>http_req</code> to agent via relay for all HTTP requests</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">3</div>
+            <div class="step-text">Agent proxies to <code>http://127.0.0.1:13131</code> (code-server), returns <code>http_res</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">4</div>
+            <div class="step-text">VS Code WebSocket: <code>ws_open</code> → agent dials code-server WS, relays frames</div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">5</div>
+            <div class="step-text">Server rewrites <code>&lt;base href&gt;</code> so VS Code assets resolve correctly under <code>/proxy/{id}/</code></div>
+          </div>
+          <div class="step-arrow">↓</div>
+          <div class="flow-step">
+            <div class="step-num">6</div>
+            <div class="step-text">Full VS Code experience in the browser. Files live on persistent EBS <code>/workspace</code>.</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── 3. Provisioning Pipeline ───────────────────── -->
+  <section>
+    <div class="section-label">Section 03</div>
+    <div class="section-title">Provisioning Pipeline</div>
+    <div class="section-desc">Every workspace operation (start / stop / delete) is a job in DynamoDB. Ten concurrent workers claim jobs atomically and run Terraform — no single point of serialization.</div>
+
+    <div class="card" style="padding:28px;">
+      <div class="pipeline">
+
+        <div class="pipe-step trigger">
+          <div class="pipe-icon">📡</div>
+          <div class="pipe-name">API Request</div>
+          <div class="pipe-detail">POST /start, /stop<br>DELETE /workspace</div>
+        </div>
+
+        <div class="pipe-arrow">→</div>
+
+        <div class="pipe-step queue">
+          <div class="pipe-icon">📋</div>
+          <div class="pipe-name">DynamoDB Job</div>
+          <div class="pipe-detail">igloo-ws-jobs<br>status = pending<br>TTL 7 days</div>
+        </div>
+
+        <div class="pipe-arrow">→</div>
+
+        <div class="pipe-step worker">
+          <div class="pipe-icon">⚙️</div>
+          <div class="pipe-name">Worker Claims</div>
+          <div class="pipe-detail">Atomic UpdateItem<br>ConditionExpression<br>10 concurrent</div>
+        </div>
+
+        <div class="pipe-arrow">→</div>
+
+        <div class="pipe-step tf">
+          <div class="pipe-icon">🏗️</div>
+          <div class="pipe-name">Terraform</div>
+          <div class="pipe-detail">init (provider cached)<br>apply / destroy<br>S3 remote state</div>
+        </div>
+
+        <div class="pipe-arrow">→</div>
+
+        <div class="pipe-step done">
+          <div class="pipe-icon">✅</div>
+          <div class="pipe-name">Done</div>
+          <div class="pipe-detail">DynamoDB updated<br>3 retries on fail<br>Permanent fail → error status</div>
+        </div>
+
+      </div>
+
+      <div style="margin-top:24px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Retry Logic</div>
+          <div style="font-size:12px;color:var(--text);line-height:1.6;">Max 3 retries per job. Stale jobs (running &gt;15 min after server crash) are re-queued automatically on startup.</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">In-flight Lock</div>
+          <div style="font-size:12px;color:var(--text);line-height:1.6;">Per-workspace <code style="font-family:monospace;color:var(--orange);font-size:11px">sync.Map</code> prevents two workers from running Terraform against the same workspace simultaneously.</div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px;">
+          <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px;">Delete Guard</div>
+          <div style="font-size:12px;color:var(--text);line-height:1.6;">Status <code style="font-family:monospace;color:var(--orange);font-size:11px">deleting</code> skips any pending start/stop jobs. Workspace removed from DB only after destroy succeeds.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 4. Sleep / Wake Lifecycle ─────────────────── -->
+  <section>
+    <div class="section-label">Section 04</div>
+    <div class="section-title">Sleep / Wake Lifecycle</div>
+    <div class="section-desc">Workspaces auto-sleep to $0 when idle. Your files live on an EBS volume that stays attached — wake time is ~15 seconds, not minutes.</div>
+
+    <div class="lifecycle">
+
+      <div class="lc-phase active">
+        <div class="lc-arrow">→</div>
+        <div class="lc-title green">Running</div>
+        <div class="lc-subtitle">Active workspace</div>
+        <div class="lc-item">Fargate task running (desired=1)</div>
+        <div class="lc-item">igloo-agent WebSocket connected</div>
+        <div class="lc-item">sshd listening on port 22</div>
+        <div class="lc-item">code-server on port 13131</div>
+        <div class="lc-item">EBS volume mounted at /workspace</div>
+        <div class="lc-cost green">~$0.02 / hour</div>
+      </div>
+
+      <div class="lc-phase sleep">
+        <div class="lc-arrow">→</div>
+        <div class="lc-title blue">Sleeping</div>
+        <div class="lc-subtitle">Container gone, data safe</div>
+        <div class="lc-item">Terraform apply with desired_count=0</div>
+        <div class="lc-item">ECS service scales to zero tasks</div>
+        <div class="lc-item">EBS detached but NOT deleted</div>
+        <div class="lc-item">Agent disconnects → status sleeping</div>
+        <div class="lc-item">DynamoDB record preserved</div>
+        <div class="lc-cost blue">~$0.001 / hour (EBS only)</div>
+      </div>
+
+      <div class="lc-phase wake">
+        <div class="lc-arrow">→</div>
+        <div class="lc-title orange">Waking</div>
+        <div class="lc-subtitle">Terraform re-provisions</div>
+        <div class="lc-item">Provisioner claims JobStart from queue</div>
+        <div class="lc-item">terraform init (provider pre-baked)</div>
+        <div class="lc-item">terraform apply desired_count=1</div>
+        <div class="lc-item">ECS starts task with same EBS volume</div>
+        <div class="lc-item">Agent dials back → status running</div>
+        <div class="lc-cost orange">~15 second wake time</div>
+      </div>
+
+      <div class="lc-phase" style="border-right:none;">
+        <div class="lc-title" style="color:var(--red)">Deleting</div>
+        <div class="lc-subtitle">Permanent teardown</div>
+        <div class="lc-item">Status set to <code style="font-family:monospace;font-size:11px;color:var(--orange)">deleting</code> immediately</div>
+        <div class="lc-item">Start/stop jobs skipped</div>
+        <div class="lc-item">terraform destroy — ECS service + EBS</div>
+        <div class="lc-item">DynamoDB record deleted on success</div>
+        <div class="lc-item">S3 Terraform state key removed</div>
+        <div class="lc-cost" style="background:rgba(248,81,73,.12);color:var(--red)">$0 after completion</div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ── 5. DynamoDB Data Model ─────────────────────── -->
+  <section>
+    <div class="section-label">Section 05</div>
+    <div class="section-title">Data Model</div>
+    <div class="section-desc">Four DynamoDB tables. The store interface is cloud-agnostic — swap DynamoDB for Firestore or Cosmos DB without changing a line of application logic.</div>
+
+    <div class="ddb-grid">
+      <div class="ddb-table">
+        <div class="ddb-header">👤 igloo-users</div>
+        <div class="ddb-field"><span class="pk">PK</span> id (UUID)</div>
+        <div class="ddb-field"><span class="gsi">GSI</span> email-index</div>
+        <div class="ddb-field">name</div>
+        <div class="ddb-field">password_hash</div>
+        <div class="ddb-field">ssh_public_key</div>
+        <div class="ddb-field">is_admin</div>
+        <div class="ddb-field">created_at</div>
+      </div>
+
+      <div class="ddb-table">
+        <div class="ddb-header">🏢 igloo-workspaces</div>
+        <div class="ddb-field"><span class="pk">PK</span> id (UUID)</div>
+        <div class="ddb-field"><span class="gsi">GSI</span> user_id-index</div>
+        <div class="ddb-field">name, provider</div>
+        <div class="ddb-field">status</div>
+        <div class="ddb-field">agent_token (hidden)</div>
+        <div class="ddb-field">vars (template inputs)</div>
+        <div class="ddb-field">meta (task ARN, EBS ID…)</div>
+      </div>
+
+      <div class="ddb-table">
+        <div class="ddb-header">📐 igloo-templates</div>
+        <div class="ddb-field"><span class="pk">PK</span> id</div>
+        <div class="ddb-field">name, provider</div>
+        <div class="ddb-field">description, icon</div>
+        <div class="ddb-field">variables (JSON)</div>
+        <div class="ddb-field">files (TF source)</div>
+        <div class="ddb-field">builtin</div>
+        <div class="ddb-field">created_at</div>
+      </div>
+
+      <div class="ddb-table">
+        <div class="ddb-header">⚙️ igloo-ws-jobs</div>
+        <div class="ddb-field"><span class="pk">PK</span> id (UUID)</div>
+        <div class="ddb-field"><span class="gsi">GSI</span> status-created_at</div>
+        <div class="ddb-field">workspace_id</div>
+        <div class="ddb-field">action (start/stop/destroy)</div>
+        <div class="ddb-field">status (pending→running→done)</div>
+        <div class="ddb-field">retry_count (max 3)</div>
+        <div class="ddb-field">TTL 7 days</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 6. Tech Stack ──────────────────────────────── -->
+  <section>
+    <div class="section-label">Section 06</div>
+    <div class="section-title">Tech Stack</div>
+    <div class="section-desc">Minimal, no-framework choices. The whole control plane is a single Go binary under 20MB.</div>
+
+    <div class="stack-grid">
+      <div class="stack-card">
+        <div class="stack-icon">🐹</div>
+        <div class="stack-name">Go 1.24</div>
+        <div class="stack-role">API server, provisioner, agent, CLI — single language across all binaries</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">🏗️</div>
+        <div class="stack-name">Terraform</div>
+        <div class="stack-role">Workspace lifecycle. Pre-baked AWS provider in provisioner image. S3 remote state per workspace.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">🌐</div>
+        <div class="stack-name">gorilla/websocket</div>
+        <div class="stack-role">Agent WebSocket, browser relay, SSH tunnel, VS Code proxy — all over a single WS connection per workspace</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">🗄️</div>
+        <div class="stack-name">DynamoDB</div>
+        <div class="stack-role">Atomic job claiming (ConditionExpression). Store interface is swappable for Firestore / Cosmos DB.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">🐧</div>
+        <div class="stack-name">Ubuntu 24.04</div>
+        <div class="stack-role">Workspace image with build tools, Python, Node, AWS CLI, code-server, sshd, igloo-agent</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">🔐</div>
+        <div class="stack-name">JWT (HMAC-256)</div>
+        <div class="stack-role">Short-lived tokens for agent, browser, terminal, forward, and VS Code proxy — role-scoped claims</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">⚖️</div>
+        <div class="stack-name">AWS ALB</div>
+        <div class="stack-role">Single entry point. WebSocket sticky sessions not needed — relay is in-memory, one server instance.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-icon">🪣</div>
+        <div class="stack-name">S3 + EBS</div>
+        <div class="stack-role">S3 for Terraform state isolation. EBS for persistent workspace disk — survives container restarts.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 7. Cost Breakdown ──────────────────────────── -->
+  <section>
+    <div class="section-label">Section 07</div>
+    <div class="section-title">Estimated Cost</div>
+    <div class="section-desc">Per-workspace costs for a 0.5 vCPU / 1 GB Fargate task in us-east-1. Control plane is shared across all workspaces.</div>
+
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table>
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Running (per hour)</th>
+            <th>Sleeping (per hour)</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>ECS Fargate task</td>
+            <td style="color:var(--yellow)">~$0.017</td>
+            <td style="color:var(--green)">$0.00</td>
+            <td style="color:var(--muted)">0.5 vCPU + 1 GB RAM</td>
+          </tr>
+          <tr>
+            <td>EBS volume (20 GB)</td>
+            <td style="color:var(--yellow)">~$0.002</td>
+            <td style="color:var(--blue)">~$0.002</td>
+            <td style="color:var(--muted)">gp3, persists through sleep/wake</td>
+          </tr>
+          <tr>
+            <td>DynamoDB (on-demand)</td>
+            <td style="color:var(--yellow)">~$0.0001</td>
+            <td style="color:var(--green)">~$0.00001</td>
+            <td style="color:var(--muted)">Pay-per-request, near zero at rest</td>
+          </tr>
+          <tr>
+            <td>S3 state storage</td>
+            <td colspan="2" style="color:var(--green)">~$0.000023 / month</td>
+            <td style="color:var(--muted)">~1 KB per workspace state file</td>
+          </tr>
+          <tr>
+            <td>ALB (shared)</td>
+            <td colspan="2" style="color:var(--yellow)">$0.008 / hour + $0.008 / LCU</td>
+            <td style="color:var(--muted)">Fixed cost, amortized across all workspaces</td>
+          </tr>
+          <tr>
+            <td>Provisioner (shared)</td>
+            <td colspan="2" style="color:var(--yellow)">~$0.05 / hour</td>
+            <td style="color:var(--muted)">1 task, 1 vCPU / 2 GB, shared across all jobs</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── 8. EKS Compatibility ───────────────────────── -->
+  <section>
+    <div class="section-label">Section 08</div>
+    <div class="section-title">EKS Migration Path</div>
+    <div class="section-desc">The architecture is designed for multi-cloud from the start. Migrating workspaces to EKS is additive — no rewrites required.</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+
+      <div class="card">
+        <div class="card-title">✅ Already Agnostic</div>
+        <div class="lc-item" style="margin-bottom:8px;">igloo-agent — just a binary, runs anywhere</div>
+        <div class="lc-item" style="margin-bottom:8px;">WebSocket relay — no ECS dependency</div>
+        <div class="lc-item" style="margin-bottom:8px;">DynamoDB store — behind a Go interface</div>
+        <div class="lc-item" style="margin-bottom:8px;">Job queue — provider-agnostic, dispatches by <code style="font-family:monospace;color:var(--orange);font-size:11px">ws.Provider</code></div>
+        <div class="lc-item" style="margin-bottom:8px;">Terraform provisioner — runs any <code style="font-family:monospace;color:var(--orange);font-size:11px">.tf</code> files</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🔧 What Needs Adding for EKS</div>
+        <div class="lc-item" style="margin-bottom:8px;">New template: <code style="font-family:monospace;color:var(--orange);font-size:11px">templates/aws-eks/</code> — K8s Deployment + PVC</div>
+        <div class="lc-item" style="margin-bottom:8px;"><code style="font-family:monospace;color:var(--orange);font-size:11px">aws-eks</code> case in worker dispatch → <code style="font-family:monospace;color:var(--orange);font-size:11px">launchEKS()</code></div>
+        <div class="lc-item" style="margin-bottom:8px;">New env vars: <code style="font-family:monospace;color:var(--orange);font-size:11px">IGLOO_EKS_CLUSTER</code>, <code style="font-family:monospace;color:var(--orange);font-size:11px">IGLOO_K8S_NAMESPACE</code></div>
+        <div class="lc-item" style="margin-bottom:8px;">Sleep = scale Deployment to 0 replicas (same Terraform, different vars)</div>
+        <div class="lc-item" style="margin-bottom:8px;">Same agent, same relay, same SSH/terminal/VS Code flows</div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  Built with Go, Terraform, AWS Fargate — <strong>Igloo v0.1</strong>
+</footer>
+
+</body>
+</html>

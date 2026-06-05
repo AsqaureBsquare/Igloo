@@ -27,3 +27,22 @@ variable "provisioner_key" {
   type        = string
   sensitive   = true
 }
+
+variable "server_url" {
+  description = "Public URL of the Igloo server (e.g. https://igloos.cloud). Defaults to the ALB HTTP URL if not set."
+  type        = string
+  default     = ""
+}
+
+variable "tailscale_api_key" {
+  description = "Tailscale API key — used by server to issue per-workspace auth keys"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "tailscale_tailnet" {
+  description = "Tailscale tailnet name (e.g. example.com or user@gmail.com)"
+  type        = string
+  default     = "-"
+}

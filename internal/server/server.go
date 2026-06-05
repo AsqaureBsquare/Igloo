@@ -18,6 +18,7 @@ import (
 	"github.com/igloo-dev/igloo/internal/models"
 	"github.com/igloo-dev/igloo/internal/relay"
 	"github.com/igloo-dev/igloo/internal/store"
+	"github.com/igloo-dev/igloo/internal/tailnet"
 )
 
 //go:embed static
@@ -30,11 +31,36 @@ type Server struct {
 
 func New(st store.Store, a *auth.Auth) *Server {
 	h := &api.Handler{
-		Store:    st,
-		Auth:     a,
-		Relay:    relay.New(),
-		Registry: api.NewProvisionerRegistry(),
+		Store:       st,
+		Auth:        a,
+		Relay:       relay.New(),
+		Registry:    api.NewProvisionerRegistry(),
+		LogBuf:      api.NewLogBuffer(),
+		Coordinator: tailnet.NewCoordinator(),
 	}
+
+	// Wire up OIDC if configured via environment variables.
+	if issuer := os.Getenv("IGLOO_OIDC_ISSUER_URL"); issuer != "" {
+		scopes := strings.Fields(os.Getenv("IGLOO_OIDC_SCOPES"))
+		cfg := auth.OIDCConfig{
+			IssuerURL:    issuer,
+			ClientID:     os.Getenv("IGLOO_OIDC_CLIENT_ID"),
+			ClientSecret: os.Getenv("IGLOO_OIDC_CLIENT_SECRET"),
+			RedirectURL:  os.Getenv("IGLOO_OIDC_REDIRECT_URL"),
+			Scopes:       scopes,
+			ButtonText:   os.Getenv("IGLOO_OIDC_BUTTON_TEXT"),
+			IconURL:      os.Getenv("IGLOO_OIDC_ICON_URL"),
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if p, err := auth.NewOIDCProvider(ctx, cfg); err != nil {
+			log.Printf("[oidc] failed to initialise provider: %v", err)
+		} else {
+			h.OIDC = p
+			log.Printf("[oidc] provider ready issuer=%s", issuer)
+		}
+	}
+	h.DisablePasswordAuth = os.Getenv("IGLOO_DISABLE_PASSWORD_AUTH") == "true"
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
@@ -44,8 +70,11 @@ func New(st store.Store, a *auth.Auth) *Server {
 
 	// ─── Public routes ────────────────────────────────────────────────────────
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/api/auth/config", h.AuthConfig)
 	r.Post("/api/auth/register", h.Register)
 	r.Post("/api/auth/login", h.Login)
+	r.Get("/api/auth/oidc/login", h.OIDCLogin)
+	r.Get("/api/auth/oidc/callback", h.OIDCCallback)
 	r.Get("/ws", h.WebSocket)
 
 	// ─── Authenticated routes ─────────────────────────────────────────────────
@@ -54,6 +83,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 
 		r.Get("/api/auth/me", h.Me)
 		r.Put("/api/auth/me/ssh-key", h.UpdateSSHKey)
+		r.Put("/api/auth/me/tailscale-key", h.UpdateTailscaleKey)
 
 		r.Get("/api/workspaces", h.ListWorkspaces)
 		r.Post("/api/workspaces", h.CreateWorkspace)
@@ -74,6 +104,24 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Get("/api/workspaces/{id}/vscode-token", h.VScodeToken)
 		r.Get("/api/workspaces/{id}/forward-token", h.ForwardToken)
 
+		// ─── Organizations & Teams ────────────────────────────────────────────
+		r.Get("/api/orgs", h.ListOrgs)
+		r.Post("/api/orgs", h.CreateOrg)
+		r.Get("/api/orgs/{id}", h.GetOrg)
+		r.Put("/api/orgs/{id}", h.UpdateOrg)
+		r.Delete("/api/orgs/{id}", h.DeleteOrg)
+		r.Get("/api/orgs/{id}/members", h.ListOrgMembers)
+		r.Post("/api/orgs/{id}/members", h.AddOrgMember)
+		r.Put("/api/orgs/{id}/members/{userID}", h.UpdateOrgMember)
+		r.Delete("/api/orgs/{id}/members/{userID}", h.RemoveOrgMember)
+		r.Get("/api/orgs/{id}/teams", h.ListTeams)
+		r.Post("/api/orgs/{id}/teams", h.CreateTeam)
+		r.Get("/api/orgs/{id}/teams/{teamID}", h.GetTeam)
+		r.Delete("/api/orgs/{id}/teams/{teamID}", h.DeleteTeam)
+		r.Get("/api/orgs/{id}/teams/{teamID}/members", h.ListTeamMembers)
+		r.Post("/api/orgs/{id}/teams/{teamID}/members", h.AddTeamMember)
+		r.Delete("/api/orgs/{id}/teams/{teamID}/members/{userID}", h.RemoveTeamMember)
+
 		// ─── Admin routes ─────────────────────────────────────────────────────
 		r.Group(func(r chi.Router) {
 			r.Use(h.RequireAdmin)
@@ -83,6 +131,8 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Post("/api/admin/provisioner-keys", h.CreateProvisionerKey)
 			r.Get("/api/admin/provisioner-keys", h.ListProvisionerKeys)
 			r.Delete("/api/admin/provisioner-keys/{id}", h.DeleteProvisionerKey)
+			r.Get("/api/admin/platform-config", h.GetPlatformConfig)
+			r.Put("/api/admin/platform-config", h.SavePlatformConfig)
 		})
 	})
 
@@ -96,6 +146,13 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Post("/api/provisioner/jobs/{id}/done", h.JobDone)
 		r.Post("/api/provisioner/jobs/{id}/fail", h.JobFail)
 	})
+
+	// SSE log stream — token via ?token= query param (EventSource can't set headers)
+	r.Get("/api/workspaces/{id}/provision-logs", h.ProvisionLogs)
+
+	// Built-in WireGuard coordination — token auth via ?token= query param
+	// Agents connect with role=agent, CLI clients with role=client.
+	r.Get("/api/workspaces/{id}/tailnet", h.TailnetWS)
 
 	// SSH / TCP port-forward — token auth via ?token= query param
 	r.Get("/api/workspaces/{id}/forward", h.Forward)
@@ -251,6 +308,10 @@ func loadTemplateFiles(name string) map[string]string {
 }
 
 func (s *Server) StartWorker(ctx context.Context) {
+	// Dispatch loop runs in all modes — picks up pending jobs when a provisioner
+	// reconnects after a server restart or transient DynamoDB GSI consistency lag.
+	s.handler.Registry.StartDispatchLoop(ctx, s.handler)
+
 	if os.Getenv("IGLOO_DAEMON_MODE") == "true" {
 		// External provisioner daemon handles jobs; server only watches for dead daemons.
 		go s.runHeartbeatWatcher(ctx)

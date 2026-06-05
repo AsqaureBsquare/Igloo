@@ -134,6 +134,28 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ws.Provider == "aws-fargate" {
+		// Inject Tailscale: platform API key takes priority (admin configures once),
+		// then fall back to the user's personal auth key.
+		var tsKey, tsHostname string
+		if cfg, _ := h.Store.GetPlatformConfig(r.Context()); cfg != nil {
+			tsKey, tsHostname, _ = IssueTailscaleKey(cfg.TailscaleAPIKey, cfg.TailscaleTailnet, ws.ID, ws.Name)
+		}
+		if tsKey == "" {
+			if user, err := h.Store.GetUser(r.Context(), ws.UserID); err == nil && user.TailscaleAuthKey != "" {
+				tsKey = user.TailscaleAuthKey
+				tsHostname = tailscaleHostname(ws.Name, ws.ID)
+			}
+		}
+		if tsKey != "" {
+			if ws.Vars == nil {
+				ws.Vars = make(map[string]string)
+			}
+			ws.Vars["tailscale_auth_key"] = tsKey
+			ws.Vars["tailscale_hostname"] = tsHostname
+			_ = h.Store.UpdateWorkspace(r.Context(), ws)
+			log.Printf("[workspace] tailscale injected hostname=%s workspace=%s", tsHostname, ws.ID)
+		}
+
 		if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobStart); err != nil {
 			log.Printf("[workspace] failed to enqueue start job workspace=%s: %v", ws.ID, err)
 		} else {
@@ -208,6 +230,57 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		_ = h.Store.DeleteWorkspace(r.Context(), ws.ID)
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/workspaces/{id}/provision-logs — SSE stream of live provisioner output.
+// Accepts token via Authorization header or ?token= query param (EventSource can't set headers).
+func (h *Handler) ProvisionLogs(w http.ResponseWriter, r *http.Request) {
+	token := r.URL.Query().Get("token")
+	if token == "" {
+		token, _ = strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	}
+	claims, err := h.Auth.ParseUser(token)
+	if err != nil {
+		h.err(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	wsID := chi.URLParam(r, "id")
+	ws, err := h.Store.GetWorkspace(r.Context(), wsID)
+	if err != nil || ws.UserID != claims.UserID {
+		h.err(w, http.StatusNotFound, "not found")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		h.err(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	snapshot, ch, cancel := h.LogBuf.Subscribe(wsID)
+	defer cancel()
+
+	for _, line := range snapshot {
+		fmt.Fprintf(w, "data: %s\n\n", line)
+	}
+	flusher.Flush()
+
+	for {
+		select {
+		case line, ok := <-ch:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 // GET /api/workspaces/{id}/terminal

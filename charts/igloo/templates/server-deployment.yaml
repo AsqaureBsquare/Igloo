@@ -57,6 +57,33 @@ spec:
               value: {{ .Values.server.dynamo.templatesTable | quote }}
             - name: IGLOO_DYNAMO_JOBS_TABLE
               value: {{ .Values.server.dynamo.jobsTable | quote }}
+            {{- if .Values.server.oidc.enabled }}
+            - name: IGLOO_OIDC_ISSUER_URL
+              value: {{ .Values.server.oidc.issuerURL | quote }}
+            - name: IGLOO_OIDC_CLIENT_ID
+              value: {{ .Values.server.oidc.clientID | quote }}
+            - name: IGLOO_OIDC_REDIRECT_URL
+              value: {{ .Values.server.oidc.redirectURL | quote }}
+            - name: IGLOO_OIDC_SCOPES
+              value: {{ .Values.server.oidc.scopes | quote }}
+            {{- if .Values.server.oidc.buttonText }}
+            - name: IGLOO_OIDC_BUTTON_TEXT
+              value: {{ .Values.server.oidc.buttonText | quote }}
+            {{- end }}
+            {{- if .Values.server.oidc.iconURL }}
+            - name: IGLOO_OIDC_ICON_URL
+              value: {{ .Values.server.oidc.iconURL | quote }}
+            {{- end }}
+            {{- if .Values.server.oidc.clientSecret }}
+            - name: IGLOO_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.fullname" . }}-secrets
+                  key: IGLOO_OIDC_CLIENT_SECRET
+            {{- end }}
+            - name: IGLOO_DISABLE_PASSWORD_AUTH
+              value: {{ .Values.server.oidc.disablePasswordAuth | quote }}
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /health

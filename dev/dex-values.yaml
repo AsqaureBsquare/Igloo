@@ -1,0 +1,55 @@
+# Dex OIDC provider — local minikube dev setup
+# Deploy with:
+#   helm repo add dex https://charts.dexidp.io
+#   helm install dex dex/dex -n dex --create-namespace -f dev/dex-values.yaml
+#
+# Then deploy Igloo pointing at Dex:
+#   helm upgrade --install igloo ./charts/igloo \
+#     --set server.jwtSecret=$(openssl rand -hex 32) \
+#     --set provisioner.key=$(openssl rand -hex 32) \
+#     --set server.localMode=true \
+#     --set server.serverURL=http://$(minikube ip):30080 \
+#     --set server.oidc.enabled=true \
+#     --set server.oidc.issuerURL=http://$(minikube ip):32000/dex \
+#     --set server.oidc.clientID=igloo \
+#     --set server.oidc.clientSecret=igloo-dev-secret \
+#     --set "server.oidc.redirectURL=http://$(minikube ip):30080/api/auth/oidc/callback" \
+#     --set server.oidc.buttonText="Sign in with Dex"
+
+config:
+  issuer: http://MINIKUBE_IP:32000/dex  # replace MINIKUBE_IP with: minikube ip
+
+  storage:
+    type: memory
+
+  web:
+    http: 0.0.0.0:5556
+
+  logger:
+    level: debug
+
+  # Static OAuth2 client for Igloo
+  staticClients:
+    - id: igloo
+      name: Igloo
+      secret: igloo-dev-secret
+      redirectURIs:
+        - http://MINIKUBE_IP:30080/api/auth/oidc/callback  # replace MINIKUBE_IP
+
+  # Static users for local testing (no external IdP needed)
+  enablePasswordDB: true
+  staticPasswords:
+    - email: admin@example.com
+      hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYhe.yOI4GW5rNZHg2a"  # password: "password"
+      username: admin
+      userID: "admin-user-id"
+    - email: dev@example.com
+      hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYhe.yOI4GW5rNZHg2a"  # password: "password"
+      username: developer
+      userID: "dev-user-id"
+
+service:
+  type: NodePort
+  ports:
+    http:
+      nodePort: 32000

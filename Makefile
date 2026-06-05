@@ -4,7 +4,7 @@ CLUSTER          := igloo
 SERVICE          := igloo-server
 PROV_SERVICE     := igloo-provisioner
 
-.PHONY: build push deploy build-provisioner push-provisioner deploy-provisioner infra ecr-login
+.PHONY: build push deploy build-provisioner push-provisioner deploy-provisioner build-workspace push-workspace infra ecr-login
 
 ecr-login:
 	aws ecr get-login-password --region $(REGION) | \
@@ -51,6 +51,17 @@ deploy-provisioner: push-provisioner
 		--region $(REGION) --query 'services[0].deployments | length(@)' \
 		--output text | grep -q "^1$$"; do sleep 5; done
 	@echo "Provisioner deployed."
+
+# ─── Workspace image ─────────────────────────────────────────────────────────
+
+build-workspace: ecr-login
+	GOOS=linux GOARCH=amd64 go build -o workspace/igloo-agent ./cmd/agent
+	docker build --platform linux/amd64 -f workspace/Dockerfile -t igloo-workspace workspace/
+	docker tag igloo-workspace:latest $(ECR)/igloo-workspace:latest
+	rm -f workspace/igloo-agent
+
+push-workspace: build-workspace
+	docker push $(ECR)/igloo-workspace:latest
 
 # ─── Infrastructure ───────────────────────────────────────────────────────────
 

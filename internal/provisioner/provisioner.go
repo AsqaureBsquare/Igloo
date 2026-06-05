@@ -3,9 +3,11 @@
 package provisioner
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -26,7 +28,8 @@ type Input struct {
 	Vars        map[string]string // all variables: user-supplied + server-injected
 	StateBucket string            // S3 bucket for terraform state
 	StateRegion string
-	LogPath     string // file to append terraform output to
+	LogPath     string       // file to append terraform output to
+	LogFunc     func(string) // optional: called for each output line (for live streaming)
 }
 
 // Run executes terraform apply or terraform destroy for a workspace.
@@ -83,10 +86,33 @@ func Run(ctx context.Context, in Input, action Action) (map[string]string, error
 	run := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "terraform", args...)
 		cmd.Dir = dir
-		cmd.Stdout = lf
-		cmd.Stderr = lf
 		cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=1", "TF_INPUT=false")
 		logLine(fmt.Sprintf("[provisioner] terraform %s", strings.Join(args, " ")))
+
+		if in.LogFunc != nil {
+			pr, pw := io.Pipe()
+			cmd.Stdout = io.MultiWriter(lf, pw)
+			cmd.Stderr = io.MultiWriter(lf, pw)
+			scanDone := make(chan struct{})
+			go func() {
+				defer close(scanDone)
+				scanner := bufio.NewScanner(pr)
+				for scanner.Scan() {
+					in.LogFunc(scanner.Text())
+				}
+			}()
+			err := cmd.Run()
+			pw.Close()
+			<-scanDone
+			lf.Sync()
+			if err != nil {
+				return fmt.Errorf("terraform %s: %w", args[0], err)
+			}
+			return nil
+		}
+
+		cmd.Stdout = lf
+		cmd.Stderr = lf
 		if err := cmd.Run(); err != nil {
 			lf.Sync()
 			return fmt.Errorf("terraform %s: %w", args[0], err)

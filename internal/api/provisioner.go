@@ -20,11 +20,13 @@ var provisionerUpgrader = websocket.Upgrader{
 
 // wsMsg is the envelope for all provisioner ↔ server WebSocket messages.
 type wsMsg struct {
-	Type    string            `json:"type"`              // acquire | ping | done | fail | job
-	JobID   string            `json:"job_id,omitempty"`
-	Outputs map[string]string `json:"outputs,omitempty"` // done
-	Error   string            `json:"error,omitempty"`   // fail
-	Job     *claimResponse    `json:"job,omitempty"`     // server→daemon: type=job
+	Type        string            `json:"type"`                  // acquire | ping | log | done | fail | job
+	JobID       string            `json:"job_id,omitempty"`
+	WorkspaceID string            `json:"workspace_id,omitempty"` // log | done | fail
+	Line        string            `json:"line,omitempty"`         // log
+	Outputs     map[string]string `json:"outputs,omitempty"`      // done
+	Error       string            `json:"error,omitempty"`        // fail
+	Job         *claimResponse    `json:"job,omitempty"`          // server→daemon: type=job
 }
 
 // ProvisionerWS handles GET /api/provisioner/ws.
@@ -138,10 +140,21 @@ func (h *Handler) ProvisionerWS(w http.ResponseWriter, r *http.Request) {
 				_ = h.Store.UpdateJobHeartbeat(r.Context(), msg.JobID)
 			}
 
+		case "log":
+			if msg.WorkspaceID != "" && msg.Line != "" {
+				h.LogBuf.Append(msg.WorkspaceID, msg.Line)
+			}
+
 		case "done":
+			if msg.WorkspaceID != "" {
+				h.LogBuf.Append(msg.WorkspaceID, "✓ Provisioning complete")
+			}
 			h.handleJobDone(r.Context(), msg.JobID, msg.Outputs)
 
 		case "fail":
+			if msg.WorkspaceID != "" {
+				h.LogBuf.Append(msg.WorkspaceID, "✗ Failed: "+msg.Error)
+			}
 			h.handleJobFail(r.Context(), msg.JobID, msg.Error)
 		}
 	}

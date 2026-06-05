@@ -383,6 +383,10 @@ input, textarea { font-family: inherit; }
   box-shadow: 0 8px 32px rgba(0,0,0,0.4), 0 0 0 1px rgba(0,212,255,0.08);
   transform: translateY(-1px);
 }
+.igloo-card--active {
+  border-color: rgba(0,212,255,0.28);
+  box-shadow: 0 0 24px rgba(0,212,255,0.06);
+}
 .igloo-card:hover::before { opacity: 1; }
 
 .igloo-card-header {
@@ -542,6 +546,43 @@ input, textarea { font-family: inherit; }
 
 .igloo-actions .btn { flex: 1; justify-content: center; font-size: 12px; padding: 7px 10px; min-width: 0; }
 .igloo-actions .btn-icon { flex: 0 0 auto; }
+
+/* ─── Provision log panel ──────────────────────────────────────────────────── */
+.log-panel {
+  background: #020c18;
+  border: 1px solid rgba(0,212,255,0.12);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #58a6ff;
+  padding: 10px 12px;
+  height: 180px;
+  overflow-y: auto;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  scroll-behavior: smooth;
+}
+.log-panel::-webkit-scrollbar { width: 4px; }
+.log-panel::-webkit-scrollbar-track { background: transparent; }
+.log-panel::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.2); border-radius: 2px; }
+.log-line { white-space: pre-wrap; word-break: break-all; }
+.log-line.log-ok   { color: #3fb950; }
+.log-line.log-err  { color: #ff3d6b; }
+.log-line.log-warn { color: #ffc400; }
+.log-line.log-dim  { color: #3a5a78; }
+.log-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+.log-panel-wrap { display: flex; flex-direction: column; gap: 6px; }
 
 /* ─── Empty state ────────────────────────────────────────────────────────────── */
 .empty-state {
@@ -814,7 +855,7 @@ input, textarea { font-family: inherit; }
   word-break: break-all;
 }
 
-.btn-sm { padding: 4px 10px !important; font-size: 11px !important; }
+.btn-sm { padding: 5px 12px !important; font-size: 12px !important; width: auto !important; min-width: unset !important; }
 
 .logs-tabs {
   display: flex;
@@ -926,3 +967,80 @@ input, textarea { font-family: inherit; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--surface3); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--subtle); }
+
+/* ─── Org / Team cards ───────────────────────────────────────────────────────── */
+.card {
+  background: rgba(7,24,40,0.7);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 20px;
+  backdrop-filter: blur(8px);
+  transition: border-color .15s;
+}
+.card:hover { border-color: rgba(0,212,255,.25); }
+
+/* Panel card — header / body separated by a divider */
+.panel-card {
+  background: rgba(7,24,40,0.7);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  backdrop-filter: blur(8px);
+}
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+.panel-title { font-size: 13px; font-weight: 700; letter-spacing: -0.1px; }
+.panel-subtitle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* Inline table inside panel — no outer border, card provides it */
+.panel-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.panel-table th, .panel-table td {
+  padding: 11px 20px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+.panel-table th {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(0,212,255,0.03);
+}
+.panel-table tbody tr:last-child td { border-bottom: none; }
+.panel-table tbody tr:hover { background: rgba(0,212,255,0.03); }
+
+/* Org list cards (clickable) */
+.org-list-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: rgba(7,24,40,0.7);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  backdrop-filter: blur(8px);
+}
+.org-list-card:hover { border-color: rgba(0,212,255,.3); background: rgba(0,212,255,0.04); }
+
+.role-select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  appearance: auto;
+}

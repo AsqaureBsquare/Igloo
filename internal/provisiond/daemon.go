@@ -44,11 +44,13 @@ func New(serverURL, token string) *Daemon {
 
 // wsMsg mirrors the server's wsMsg envelope.
 type wsMsg struct {
-	Type    string            `json:"type"`
-	JobID   string            `json:"job_id,omitempty"`
-	Outputs map[string]string `json:"outputs,omitempty"`
-	Error   string            `json:"error,omitempty"`
-	Job     *claimResponse    `json:"job,omitempty"`
+	Type        string            `json:"type"`
+	JobID       string            `json:"job_id,omitempty"`
+	WorkspaceID string            `json:"workspace_id,omitempty"`
+	Line        string            `json:"line,omitempty"`
+	Outputs     map[string]string `json:"outputs,omitempty"`
+	Error       string            `json:"error,omitempty"`
+	Job         *claimResponse    `json:"job,omitempty"`
 }
 
 type claimResponse struct {
@@ -200,26 +202,33 @@ func (d *Daemon) runJob(ctx context.Context, job *claimResponse, sendCh chan<- w
 		}
 	}()
 
-	outputs, err := d.terraform(ctx, job)
+	logFunc := func(line string) {
+		select {
+		case sendCh <- wsMsg{Type: "log", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Line: line}:
+		default:
+		}
+	}
+
+	outputs, err := d.terraform(ctx, job, logFunc)
 	hbCancel()
 
 	if err != nil {
 		log.Printf("[provisiond] job=%s failed: %v", job.JobID, err)
 		select {
-		case sendCh <- wsMsg{Type: "fail", JobID: job.JobID, Error: err.Error()}:
+		case sendCh <- wsMsg{Type: "fail", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Error: err.Error()}:
 		case <-ctx.Done():
 		}
 		return
 	}
 
 	select {
-	case sendCh <- wsMsg{Type: "done", JobID: job.JobID, Outputs: outputs}:
+	case sendCh <- wsMsg{Type: "done", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Outputs: outputs}:
 		log.Printf("[provisiond] job=%s done", job.JobID)
 	case <-ctx.Done():
 	}
 }
 
-func (d *Daemon) terraform(ctx context.Context, job *claimResponse) (map[string]string, error) {
+func (d *Daemon) terraform(ctx context.Context, job *claimResponse, logFunc func(string)) (map[string]string, error) {
 	if len(job.Files) == 0 {
 		return nil, fmt.Errorf("no terraform files")
 	}
@@ -249,6 +258,7 @@ func (d *Daemon) terraform(ctx context.Context, job *claimResponse) (map[string]
 		StateBucket: job.StateBucket,
 		StateRegion: job.StateRegion,
 		LogPath:     logFilePath(job.WorkspaceID),
+		LogFunc:     logFunc,
 	}, action)
 }
 

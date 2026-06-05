@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/igloo-dev/igloo/internal/models"
 )
@@ -96,6 +97,35 @@ func (r *ProvisionerRegistry) TryDispatch(ctx context.Context, h *Handler) bool 
 			cr.JobID, cr.Action, w.provisionerID)
 		return true
 	}
+}
+
+// HasWaiters returns true if there is at least one live parked provisioner slot.
+func (r *ProvisionerRegistry) HasWaiters() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.waiters) > 0
+}
+
+// StartDispatchLoop runs a background goroutine that retries TryDispatch every 15 seconds.
+// This is the safety net for the race where a pending job exists in the DB when a
+// provisioner connects but ClaimNextJob transiently returns nil on the first attempt.
+func (r *ProvisionerRegistry) StartDispatchLoop(ctx context.Context, h *Handler) {
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if r.HasWaiters() {
+					if dispatched := r.TryDispatch(ctx, h); dispatched {
+						log.Printf("[registry] dispatch-loop picked up orphaned pending job")
+					}
+				}
+			}
+		}
+	}()
 }
 
 func (r *ProvisionerRegistry) requeue(w registryWaiter) {

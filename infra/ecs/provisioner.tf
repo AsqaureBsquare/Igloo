@@ -24,7 +24,7 @@ resource "aws_ecs_task_definition" "provisioner" {
 
     environment = [
       { name = "AWS_REGION",                   value = var.region },
-      { name = "IGLOO_SERVER_URL",             value = "http://${aws_lb.main.dns_name}" },
+      { name = "IGLOO_SERVER_URL",             value = coalesce(var.server_url, "http://${aws_lb.main.dns_name}") },
       { name = "IGLOO_ECS_CLUSTER",            value = aws_ecs_cluster.main.arn },
       { name = "IGLOO_ECS_EXECUTION_ROLE_ARN", value = aws_iam_role.execution.arn },
       { name = "IGLOO_ECS_TASK_ROLE_ARN",      value = aws_iam_role.workspace.arn },

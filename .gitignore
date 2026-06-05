@@ -15,7 +15,9 @@ venv/
 
 # Go binaries
 /igloo
+/agent
 igloo-agent
+dist/
 *.exe
 
 # macOS

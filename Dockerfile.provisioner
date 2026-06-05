@@ -19,10 +19,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-c
     apt-get purge -y --auto-remove curl unzip && \
     rm -rf /var/lib/apt/lists/*
 
-ENV TF_PLUGIN_CACHE_DIR=/root/.terraform.d/plugin-cache
-RUN mkdir -p /root/.terraform.d/plugin-cache
+RUN mkdir -p /usr/local/share/terraform/providers
 COPY prebake/ /prebake/
-RUN cd /prebake && terraform init -backend=false
+RUN cd /prebake && terraform providers mirror /usr/local/share/terraform/providers && rm -rf /prebake
+
+RUN printf 'provider_installation {\n  filesystem_mirror {\n    path    = "/usr/local/share/terraform/providers"\n    include = ["hashicorp/*", "kreuzwerker/*"]\n  }\n  direct {\n    exclude = ["hashicorp/*", "kreuzwerker/*"]\n  }\n}\n' > /root/.terraformrc
 
 COPY --from=builder /app/igloo-provisioner /usr/local/bin/igloo-provisioner
 CMD ["igloo-provisioner"]

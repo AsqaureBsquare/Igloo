@@ -74,13 +74,61 @@ type Workspace struct {
 }
 
 type User struct {
-	ID           string    `json:"id"`
-	Email        string    `json:"email"`
-	Name         string    `json:"name"`
-	PasswordHash string    `json:"-"`
-	SSHPublicKey string    `json:"ssh_public_key,omitempty"`
-	IsAdmin      bool      `json:"is_admin,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	Email            string    `json:"email"`
+	Name             string    `json:"name"`
+	PasswordHash     string    `json:"-"`
+	SSHPublicKey     string    `json:"ssh_public_key,omitempty"`
+	TailscaleAuthKey string    `json:"tailscale_auth_key,omitempty"`
+	IsAdmin          bool      `json:"is_admin,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// ─── Organizations ────────────────────────────────────────────────────────────
+
+type OrgRole string
+
+const (
+	OrgRoleAdmin  OrgRole = "admin"
+	OrgRoleMember OrgRole = "member"
+	OrgRoleViewer OrgRole = "viewer"
+)
+
+type Organization struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug"` // url-safe identifier
+	Description string    `json:"description,omitempty"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type OrgMember struct {
+	OrgID     string    `json:"org_id"`
+	UserID    string    `json:"user_id"`
+	UserEmail string    `json:"user_email,omitempty"`
+	UserName  string    `json:"user_name,omitempty"`
+	Role      OrgRole   `json:"role"`
+	JoinedAt  time.Time `json:"joined_at"`
+}
+
+// ─── Teams ────────────────────────────────────────────────────────────────────
+
+type Team struct {
+	ID          string    `json:"id"`
+	OrgID       string    `json:"org_id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	CreatedBy   string    `json:"created_by"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type TeamMember struct {
+	TeamID    string    `json:"team_id"`
+	UserID    string    `json:"user_id"`
+	UserEmail string    `json:"user_email,omitempty"`
+	UserName  string    `json:"user_name,omitempty"`
+	JoinedAt  time.Time `json:"joined_at"`
 }
 
 type Template struct {
@@ -93,6 +141,12 @@ type Template struct {
 	Variables   []TemplateVar     `json:"variables,omitempty"`
 	Files       map[string]string `json:"files,omitempty"` // filename → terraform source
 	CreatedAt   time.Time         `json:"created_at"`
+}
+
+// PlatformConfig holds admin-managed platform-level settings (stored in the users table).
+type PlatformConfig struct {
+	TailscaleAPIKey  string `json:"tailscale_api_key,omitempty"`
+	TailscaleTailnet string `json:"tailscale_tailnet,omitempty"`
 }
 
 // TemplateVar defines a user-configurable input shown in the UI at workspace creation time.

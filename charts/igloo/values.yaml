@@ -28,9 +28,22 @@ server:
   # Public URL the server is reachable at (used by workspace agents to dial home)
   serverURL: ""
 
+  # OIDC / SSO configuration (optional)
+  oidc:
+    enabled: false
+    issuerURL: ""       # e.g. https://accounts.google.com
+    clientID: ""
+    clientSecret: ""    # stored in a Kubernetes Secret
+    redirectURL: ""     # must match the redirect URI registered with the IdP
+    scopes: "openid profile email"
+    buttonText: ""      # defaults to "Sign in with SSO"
+    iconURL: ""
+    disablePasswordAuth: false  # set true to force SSO-only (hides password login)
+
   service:
     type: ClusterIP
     port: 80
+    nodePort: ""  # set when type=NodePort, e.g. 30080
 
   ingress:
     enabled: false

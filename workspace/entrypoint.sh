@@ -43,7 +43,9 @@ fi
 
 echo "[igloo] Workspace ready."
 
-# Start igloo-agent in the background if the binary is present and configured.
+# ── igloo-agent ───────────────────────────────────────────────────────────────
+# Tailscale is handled inside igloo-agent via embedded tsnet — no separate
+# tailscaled process needed.
 if [ -x /usr/local/bin/igloo-agent ] && [ -n "${IGLOO_SERVER_URL:-}" ]; then
     echo "[igloo] Starting igloo-agent..."
     /usr/local/bin/igloo-agent &

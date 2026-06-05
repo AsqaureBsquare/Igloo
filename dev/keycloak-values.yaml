@@ -1,0 +1,23 @@
+auth:
+  adminUser: admin
+  adminPassword: admin
+
+production: false
+proxy: edge
+
+extraEnvVars:
+  - name: KC_HOSTNAME
+    value: "keycloak.192.168.49.2.nip.io"
+  - name: KC_HOSTNAME_STRICT
+    value: "false"
+  - name: KC_HTTP_ENABLED
+    value: "true"
+
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  hostname: keycloak.192.168.49.2.nip.io
+  tls: false
+
+postgresql:
+  enabled: true

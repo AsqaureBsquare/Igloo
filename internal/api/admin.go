@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/igloo-dev/igloo/internal/models"
 )
 
 // RequireAdmin middleware — 403 if the user is not an admin.
@@ -40,6 +41,49 @@ func (h *Handler) AdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/admin/platform-config
+// Returns platform config. The actual API key is masked — only configured/not is exposed.
+func (h *Handler) GetPlatformConfig(w http.ResponseWriter, r *http.Request) {
+	cfg, err := h.Store.GetPlatformConfig(r.Context())
+	if err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	h.json(w, http.StatusOK, map[string]any{
+		"tailscale_configured": cfg.TailscaleAPIKey != "",
+		"tailscale_tailnet":    cfg.TailscaleTailnet,
+	})
+}
+
+// PUT /api/admin/platform-config
+func (h *Handler) SavePlatformConfig(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TailscaleAPIKey  string `json:"tailscale_api_key"`
+		TailscaleTailnet string `json:"tailscale_tailnet"`
+	}
+	if err := h.decode(r, &body); err != nil {
+		h.err(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	cfg, err := h.Store.GetPlatformConfig(r.Context())
+	if err != nil {
+		cfg = &models.PlatformConfig{}
+	}
+	// Empty string means "clear the key"; anything else updates it.
+	cfg.TailscaleAPIKey = body.TailscaleAPIKey
+	if body.TailscaleTailnet != "" {
+		cfg.TailscaleTailnet = body.TailscaleTailnet
+	}
+	if err := h.Store.SavePlatformConfig(r.Context(), cfg); err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	h.json(w, http.StatusOK, map[string]any{
+		"tailscale_configured": cfg.TailscaleAPIKey != "",
+		"tailscale_tailnet":    cfg.TailscaleTailnet,
+	})
 }
 
 // PUT /api/admin/users/{id} — update admin flag

@@ -15,14 +15,20 @@ var ErrNotFound = errors.New("not found")
 var ErrConflict = errors.New("already exists")
 
 type MemoryStore struct {
-	mu            sync.RWMutex
-	users         map[string]*models.User           // id → user
-	byEmail       map[string]string                 // email → id
-	workspaces    map[string]*models.Workspace      // id → workspace
-	templates     map[string]*models.Template       // id → template
-	jobs          map[string]*models.ProvisionJob
-	provKeys      map[string]*models.ProvisionerKey // id → key
-	byTokenHash   map[string]string                 // tokenHash → id
+	mu             sync.RWMutex
+	users          map[string]*models.User           // id → user
+	byEmail        map[string]string                 // email → id
+	workspaces     map[string]*models.Workspace      // id → workspace
+	templates      map[string]*models.Template       // id → template
+	jobs           map[string]*models.ProvisionJob
+	provKeys       map[string]*models.ProvisionerKey // id → key
+	byTokenHash    map[string]string                 // tokenHash → id
+	platformConfig *models.PlatformConfig
+	orgs           map[string]*models.Organization   // id → org
+	orgsBySlug     map[string]string                 // slug → id
+	orgMembers     map[string]*models.OrgMember      // orgID+userID → member
+	teams          map[string]*models.Team            // id → team
+	teamMembers    map[string]*models.TeamMember      // teamID+userID → member
 }
 
 func NewMemory() *MemoryStore {
@@ -34,6 +40,11 @@ func NewMemory() *MemoryStore {
 		jobs:        make(map[string]*models.ProvisionJob),
 		provKeys:    make(map[string]*models.ProvisionerKey),
 		byTokenHash: make(map[string]string),
+		orgs:        make(map[string]*models.Organization),
+		orgsBySlug:  make(map[string]string),
+		orgMembers:  make(map[string]*models.OrgMember),
+		teams:       make(map[string]*models.Team),
+		teamMembers: make(map[string]*models.TeamMember),
 	}
 }
 
@@ -351,4 +362,319 @@ func (s *MemoryStore) ListStaleDaemonJobs(_ context.Context, olderThan time.Dura
 		}
 	}
 	return stale, nil
+}
+
+func (s *MemoryStore) GetPlatformConfig(_ context.Context) (*models.PlatformConfig, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.platformConfig == nil {
+		return &models.PlatformConfig{}, nil
+	}
+	cp := *s.platformConfig
+	return &cp, nil
+}
+
+func (s *MemoryStore) SavePlatformConfig(_ context.Context, cfg *models.PlatformConfig) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *cfg
+	s.platformConfig = &cp
+	return nil
+}
+
+// ─── Organizations ────────────────────────────────────────────────────────────
+
+func orgMemberKey(orgID, userID string) string { return orgID + ":" + userID }
+func teamMemberKey(teamID, userID string) string { return teamID + ":" + userID }
+
+func (s *MemoryStore) CreateOrg(_ context.Context, o *models.Organization) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.orgsBySlug[o.Slug]; exists {
+		return ErrConflict
+	}
+	cp := *o
+	s.orgs[o.ID] = &cp
+	s.orgsBySlug[o.Slug] = o.ID
+	return nil
+}
+
+func (s *MemoryStore) GetOrg(_ context.Context, id string) (*models.Organization, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	o, ok := s.orgs[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *o
+	return &cp, nil
+}
+
+func (s *MemoryStore) GetOrgBySlug(_ context.Context, slug string) (*models.Organization, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.orgsBySlug[slug]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *s.orgs[id]
+	return &cp, nil
+}
+
+func (s *MemoryStore) ListOrgs(_ context.Context) ([]*models.Organization, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*models.Organization, 0, len(s.orgs))
+	for _, o := range s.orgs {
+		cp := *o
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) UpdateOrg(_ context.Context, o *models.Organization) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	existing, ok := s.orgs[o.ID]
+	if !ok {
+		return ErrNotFound
+	}
+	if existing.Slug != o.Slug {
+		delete(s.orgsBySlug, existing.Slug)
+		s.orgsBySlug[o.Slug] = o.ID
+	}
+	cp := *o
+	s.orgs[o.ID] = &cp
+	return nil
+}
+
+func (s *MemoryStore) DeleteOrg(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, ok := s.orgs[id]
+	if !ok {
+		return ErrNotFound
+	}
+	delete(s.orgsBySlug, o.Slug)
+	delete(s.orgs, id)
+	for k, m := range s.orgMembers {
+		if m.OrgID == id {
+			delete(s.orgMembers, k)
+		}
+	}
+	for _, t := range s.teams {
+		if t.OrgID == id {
+			delete(s.teams, t.ID)
+			for k, tm := range s.teamMembers {
+				if tm.TeamID == t.ID {
+					delete(s.teamMembers, k)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// ─── Org members ──────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) AddOrgMember(_ context.Context, m *models.OrgMember) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *m
+	s.orgMembers[orgMemberKey(m.OrgID, m.UserID)] = &cp
+	return nil
+}
+
+func (s *MemoryStore) GetOrgMember(_ context.Context, orgID, userID string) (*models.OrgMember, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	m, ok := s.orgMembers[orgMemberKey(orgID, userID)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *m
+	return &cp, nil
+}
+
+func (s *MemoryStore) ListOrgMembers(_ context.Context, orgID string) ([]*models.OrgMember, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.OrgMember
+	for _, m := range s.orgMembers {
+		if m.OrgID == orgID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ListUserOrgs(_ context.Context, userID string) ([]*models.OrgMember, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.OrgMember
+	for _, m := range s.orgMembers {
+		if m.UserID == userID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) UpdateOrgMember(_ context.Context, m *models.OrgMember) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := orgMemberKey(m.OrgID, m.UserID)
+	if _, ok := s.orgMembers[key]; !ok {
+		return ErrNotFound
+	}
+	cp := *m
+	s.orgMembers[key] = &cp
+	return nil
+}
+
+func (s *MemoryStore) RemoveOrgMember(_ context.Context, orgID, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := orgMemberKey(orgID, userID)
+	if _, ok := s.orgMembers[key]; !ok {
+		return ErrNotFound
+	}
+	delete(s.orgMembers, key)
+	return nil
+}
+
+// ─── Teams ────────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateTeam(_ context.Context, t *models.Team) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *t
+	s.teams[t.ID] = &cp
+	return nil
+}
+
+func (s *MemoryStore) GetTeam(_ context.Context, id string) (*models.Team, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.teams[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *t
+	return &cp, nil
+}
+
+func (s *MemoryStore) ListTeams(_ context.Context, orgID string) ([]*models.Team, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.Team
+	for _, t := range s.teams {
+		if t.OrgID == orgID {
+			cp := *t
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) UpdateTeam(_ context.Context, t *models.Team) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.teams[t.ID]; !ok {
+		return ErrNotFound
+	}
+	cp := *t
+	s.teams[t.ID] = &cp
+	return nil
+}
+
+func (s *MemoryStore) DeleteTeam(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.teams[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.teams, id)
+	for k, m := range s.teamMembers {
+		if m.TeamID == id {
+			delete(s.teamMembers, k)
+		}
+	}
+	return nil
+}
+
+// ─── Team members ─────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) AddTeamMember(_ context.Context, m *models.TeamMember) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *m
+	s.teamMembers[teamMemberKey(m.TeamID, m.UserID)] = &cp
+	return nil
+}
+
+func (s *MemoryStore) ListTeamMembers(_ context.Context, teamID string) ([]*models.TeamMember, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.TeamMember
+	for _, m := range s.teamMembers {
+		if m.TeamID == teamID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) ListUserTeams(_ context.Context, userID string) ([]*models.TeamMember, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.TeamMember
+	for _, m := range s.teamMembers {
+		if m.UserID == userID {
+			cp := *m
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) RemoveTeamMember(_ context.Context, teamID, userID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := teamMemberKey(teamID, userID)
+	if _, ok := s.teamMembers[key]; !ok {
+		return ErrNotFound
+	}
+	delete(s.teamMembers, key)
+	return nil
+}
+
+func (s *MemoryStore) SyncTeamMembers(_ context.Context, teamID string, userIDs []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Remove existing members not in the new list
+	want := make(map[string]bool, len(userIDs))
+	for _, id := range userIDs {
+		want[id] = true
+	}
+	for k, m := range s.teamMembers {
+		if m.TeamID == teamID && !want[m.UserID] {
+			delete(s.teamMembers, k)
+		}
+	}
+	// Add new members
+	for _, uid := range userIDs {
+		key := teamMemberKey(teamID, uid)
+		if _, exists := s.teamMembers[key]; !exists {
+			s.teamMembers[key] = &models.TeamMember{
+				TeamID:   teamID,
+				UserID:   uid,
+				JoinedAt: time.Now(),
+			}
+		}
+	}
+	return nil
 }

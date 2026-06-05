@@ -48,4 +48,38 @@ type Store interface {
 	ListProvisionerKeys(ctx context.Context) ([]*models.ProvisionerKey, error)
 	DeleteProvisionerKey(ctx context.Context, id string) error
 	TouchProvisionerKey(ctx context.Context, id string) error
+
+	// PlatformConfig holds admin-managed platform-level settings.
+	GetPlatformConfig(ctx context.Context) (*models.PlatformConfig, error)
+	SavePlatformConfig(ctx context.Context, cfg *models.PlatformConfig) error
+
+	// Organizations
+	CreateOrg(ctx context.Context, o *models.Organization) error
+	GetOrg(ctx context.Context, id string) (*models.Organization, error)
+	GetOrgBySlug(ctx context.Context, slug string) (*models.Organization, error)
+	ListOrgs(ctx context.Context) ([]*models.Organization, error)
+	UpdateOrg(ctx context.Context, o *models.Organization) error
+	DeleteOrg(ctx context.Context, id string) error
+
+	// Org members
+	AddOrgMember(ctx context.Context, m *models.OrgMember) error
+	GetOrgMember(ctx context.Context, orgID, userID string) (*models.OrgMember, error)
+	ListOrgMembers(ctx context.Context, orgID string) ([]*models.OrgMember, error)
+	ListUserOrgs(ctx context.Context, userID string) ([]*models.OrgMember, error)
+	UpdateOrgMember(ctx context.Context, m *models.OrgMember) error
+	RemoveOrgMember(ctx context.Context, orgID, userID string) error
+
+	// Teams
+	CreateTeam(ctx context.Context, t *models.Team) error
+	GetTeam(ctx context.Context, id string) (*models.Team, error)
+	ListTeams(ctx context.Context, orgID string) ([]*models.Team, error)
+	UpdateTeam(ctx context.Context, t *models.Team) error
+	DeleteTeam(ctx context.Context, id string) error
+
+	// Team members
+	AddTeamMember(ctx context.Context, m *models.TeamMember) error
+	ListTeamMembers(ctx context.Context, teamID string) ([]*models.TeamMember, error)
+	ListUserTeams(ctx context.Context, userID string) ([]*models.TeamMember, error)
+	RemoveTeamMember(ctx context.Context, teamID, userID string) error
+	SyncTeamMembers(ctx context.Context, teamID string, userIDs []string) error
 }

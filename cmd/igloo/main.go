@@ -564,6 +564,13 @@ func runServer(args []string) {
 		}
 		log.Printf("[igloo] using postgres store")
 		st = pg
+	} else if mongoURL := os.Getenv("IGLOO_MONGO_URL"); mongoURL != "" {
+		mg, err := store.NewMongoStore(context.Background(), mongoURL)
+		if err != nil {
+			log.Fatalf("[igloo] mongo init failed: %v", err)
+		}
+		log.Printf("[igloo] using mongo store")
+		st = mg
 	} else {
 		region := os.Getenv("AWS_REGION")
 		if region == "" {

@@ -5,15 +5,6 @@
 # load-balancer-arn Ingress annotation. It creates a new target group on that ALB
 # and registers EKS pods. The ALB URL stays the same — no DNS change needed.
 
-# Tag the existing ALB so the LB controller can manage it
-resource "aws_lb_tag" "main" {
-  resource_arn = data.aws_lb.main.arn
-  tags = {
-    "elbv2.k8s.aws/cluster"    = var.cluster_name
-    "ingress.k8s.aws/resource" = "LoadBalancer"
-  }
-}
-
 # IAM policy — fetch from upstream source
 data "http" "alb_controller_policy" {
   url = "https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/v2.7.1/docs/install/iam_policy.json"
@@ -56,20 +47,7 @@ resource "aws_iam_role_policy_attachment" "alb_controller" {
   policy_arn = aws_iam_policy.alb_controller.arn
 }
 
-# Kubernetes service account with IRSA annotation
-resource "kubernetes_service_account" "alb_controller" {
-  metadata {
-    name      = "aws-load-balancer-controller"
-    namespace = "kube-system"
-    annotations = {
-      "eks.amazonaws.com/role-arn" = aws_iam_role.alb_controller.arn
-    }
-  }
-
-  depends_on = [module.eks]
-}
-
-# Helm release
+# Helm release — creates the service account with IRSA annotation automatically
 resource "helm_release" "alb_controller" {
   name       = "aws-load-balancer-controller"
   repository = "https://aws.github.io/eks-charts"
@@ -85,11 +63,15 @@ resource "helm_release" "alb_controller" {
   }
   set {
     name  = "serviceAccount.create"
-    value = "false"
+    value = "true"
   }
   set {
     name  = "serviceAccount.name"
-    value = kubernetes_service_account.alb_controller.metadata[0].name
+    value = "aws-load-balancer-controller"
+  }
+  set {
+    name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+    value = aws_iam_role.alb_controller.arn
   }
   set {
     name  = "region"
@@ -110,7 +92,6 @@ resource "helm_release" "alb_controller" {
 
   depends_on = [
     aws_iam_role_policy_attachment.alb_controller,
-    kubernetes_service_account.alb_controller,
     module.eks.eks_managed_node_groups,
   ]
 }

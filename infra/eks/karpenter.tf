@@ -63,80 +63,71 @@ resource "helm_release" "karpenter" {
   depends_on = [module.eks.eks_managed_node_groups]
 }
 
-# ─── Karpenter EC2NodeClass ───────────────────────────────────────────────────
+# ─── Karpenter EC2NodeClass + NodePool ───────────────────────────────────────
+# Applied via kubectl after the Helm release is up (avoids provider init chicken-and-egg).
 
-resource "kubernetes_manifest" "karpenter_node_class" {
-  manifest = {
-    apiVersion = "karpenter.k8s.aws/v1"
-    kind       = "EC2NodeClass"
-    metadata = {
-      name = "igloo-default"
-    }
-    spec = {
-      amiSelectorTerms = [{ alias = "al2023@latest" }]
-      role             = module.karpenter.node_iam_role_name
-      subnetSelectorTerms = [
-        for id in data.aws_subnets.public.ids : { id = id }
-      ]
-      securityGroupSelectorTerms = [{
-        tags = { "karpenter.sh/discovery" = var.cluster_name }
-      }]
-      tags = { Project = "igloo" }
-    }
+resource "null_resource" "karpenter_crds" {
+  triggers = {
+    cluster_name       = module.eks.cluster_name
+    node_role          = module.karpenter.node_iam_role_name
+    subnet_ids         = join(",", sort(data.aws_subnets.public.ids))
+    karpenter_version  = helm_release.karpenter.version
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOF
+      aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name} --kubeconfig /tmp/igloo-eks-kubeconfig
+      export KUBECONFIG=/tmp/igloo-eks-kubeconfig
+
+      kubectl apply -f - <<YAML
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: igloo-default
+spec:
+  amiSelectorTerms:
+    - alias: al2023@latest
+  role: ${module.karpenter.node_iam_role_name}
+  subnetSelectorTerms:
+%{ for id in data.aws_subnets.public.ids ~}
+    - id: ${id}
+%{ endfor ~}
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: ${module.eks.cluster_name}
+  tags:
+    Project: igloo
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: igloo-default
+spec:
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: igloo-default
+      requirements:
+        - key: kubernetes.io/arch
+          operator: In
+          values: [amd64]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: [spot, on-demand]
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values: [t3.micro, t3.small]
+  disruption:
+    consolidationPolicy: WhenEmpty
+    consolidateAfter: 30s
+  limits:
+    cpu: "8"
+    memory: 8Gi
+YAML
+    EOF
   }
 
   depends_on = [helm_release.karpenter]
-}
-
-# ─── Karpenter NodePool (t3.micro) ────────────────────────────────────────────
-
-resource "kubernetes_manifest" "karpenter_node_pool" {
-  manifest = {
-    apiVersion = "karpenter.sh/v1"
-    kind       = "NodePool"
-    metadata = {
-      name = "igloo-default"
-    }
-    spec = {
-      template = {
-        spec = {
-          nodeClassRef = {
-            group = "karpenter.k8s.aws"
-            kind  = "EC2NodeClass"
-            name  = "igloo-default"
-          }
-          requirements = [
-            {
-              key      = "kubernetes.io/arch"
-              operator = "In"
-              values   = ["amd64"]
-            },
-            {
-              key      = "karpenter.sh/capacity-type"
-              operator = "In"
-              # spot first (cheaper); falls back to on-demand
-              values = ["spot", "on-demand"]
-            },
-            {
-              key      = "node.kubernetes.io/instance-type"
-              operator = "In"
-              # t3.micro free-tier eligible; add t3.small as fallback if spot unavailable
-              values = ["t3.micro", "t3.small"]
-            },
-          ]
-        }
-      }
-      # Scale to zero when idle — cost-saving
-      disruption = {
-        consolidationPolicy = "WhenEmpty"
-        consolidateAfter    = "30s"
-      }
-      limits = {
-        cpu    = "8"
-        memory = "8Gi"
-      }
-    }
-  }
-
-  depends_on = [kubernetes_manifest.karpenter_node_class]
 }

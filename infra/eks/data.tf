@@ -1,6 +1,6 @@
 # Reuse the VPC and public subnets created by infra/ecs
 data "aws_vpc" "main" {
-  tags = { Name = "igloo-vpc" }
+  id = "vpc-0bbf46b286ad5bbe5"
 }
 
 data "aws_subnets" "public" {

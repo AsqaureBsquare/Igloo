@@ -1,0 +1,83 @@
+# EKS deployment values — use with:
+#   helm upgrade --install igloo charts/igloo -f charts/igloo/eks-values.yaml \
+#     --set server.jwtSecret=<secret> \
+#     --set provisioner.key=<key> \
+#     --set server.serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=<irsa-arn>
+
+server:
+  image:
+    repository: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-server
+    tag: latest
+    pullPolicy: Always
+
+  replicas: 1
+  localMode: false
+
+  aws:
+    region: us-east-1
+
+  # DynamoDB table names (match infra/ecs terraform outputs)
+  dynamo:
+    usersTable:      igloo-users
+    workspacesTable: igloo-workspaces
+    templatesTable:  igloo-templates
+    jobsTable:       igloo-ws-jobs
+
+  # IRSA — set via --set at deploy time (output from terraform)
+  serviceAccount:
+    create: true
+    annotations: {}
+      # eks.amazonaws.com/role-arn: <server_irsa_role_arn from terraform output>
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  ingress:
+    enabled: true
+    className: alb
+    annotations:
+      kubernetes.io/ingress.class: alb
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/load-balancer-name: igloo-eks-alb
+      alb.ingress.kubernetes.io/idle-timeout: "3600"
+      alb.ingress.kubernetes.io/healthcheck-path: /health
+    host: ""   # leave empty for wildcard; set to your domain for named routing
+    tls: []
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+provisioner:
+  image:
+    repository: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-provisioner
+    tag: latest
+    pullPolicy: Always
+
+  replicas: 1
+  concurrency: 5
+
+  aws:
+    region: us-east-1
+
+  workspace:
+    image: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-workspace:latest
+
+  serviceAccount:
+    create: true
+    annotations: {}
+      # eks.amazonaws.com/role-arn: <provisioner_irsa_role_arn>
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi

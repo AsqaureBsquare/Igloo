@@ -3,8 +3,14 @@ REGION           := us-east-1
 CLUSTER          := igloo
 SERVICE          := igloo-server
 PROV_SERVICE     := igloo-provisioner
+EKS_CLUSTER      := igloo-eks
+HELM_RELEASE     := igloo
+HELM_CHART       := charts/igloo
+HELM_VALUES      := charts/igloo/eks-values.yaml
 
-.PHONY: build push deploy build-provisioner push-provisioner deploy-provisioner build-workspace push-workspace infra ecr-login
+.PHONY: build push deploy build-provisioner push-provisioner deploy-provisioner \
+        build-workspace push-workspace infra ecr-login \
+        eks-infra eks-kubeconfig helm-push helm-deploy helm-status
 
 ecr-login:
 	aws ecr get-login-password --region $(REGION) | \
@@ -63,7 +69,40 @@ build-workspace: ecr-login
 push-workspace: build-workspace
 	docker push $(ECR)/igloo-workspace:latest
 
-# ─── Infrastructure ───────────────────────────────────────────────────────────
+# ─── Infrastructure (ECS) ────────────────────────────────────────────────────
 
 infra:
 	cd infra/ecs && terraform apply -auto-approve
+
+# ─── EKS infrastructure ───────────────────────────────────────────────────────
+
+eks-infra:
+	cd infra/eks && terraform init && terraform apply -auto-approve
+
+eks-kubeconfig:
+	aws eks update-kubeconfig --region $(REGION) --name $(EKS_CLUSTER)
+
+# ─── Helm (EKS deploy) ────────────────────────────────────────────────────────
+# Required env vars: IGLOO_JWT_SECRET, IGLOO_PROVISIONER_KEY, IGLOO_IRSA_ROLE_ARN
+# Example:
+#   export IGLOO_JWT_SECRET=$(openssl rand -hex 32)
+#   export IGLOO_PROVISIONER_KEY=$(openssl rand -hex 32)
+#   export IGLOO_IRSA_ROLE_ARN=$(cd infra/eks && terraform output -raw server_irsa_role_arn)
+#   make helm-deploy
+
+helm-push: push push-provisioner push-workspace
+
+helm-deploy: helm-push eks-kubeconfig
+	helm upgrade --install $(HELM_RELEASE) $(HELM_CHART) \
+		-f $(HELM_VALUES) \
+		--set server.jwtSecret="$(IGLOO_JWT_SECRET)" \
+		--set provisioner.key="$(IGLOO_PROVISIONER_KEY)" \
+		--set "server.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=$(IGLOO_IRSA_ROLE_ARN)" \
+		--wait --timeout 5m
+	@echo ""
+	@echo "Igloo deployed. Getting ALB URL..."
+	@kubectl get ingress igloo-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "(ALB still provisioning — run: kubectl get ingress)"
+
+helm-status:
+	helm status $(HELM_RELEASE)
+	kubectl get pods,svc,ingress -l app.kubernetes.io/instance=$(HELM_RELEASE)

@@ -1,0 +1,30 @@
+{{- if .Values.provisioner.serviceAccount.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "igloo.provisioner.fullname" . }}
+  labels:
+    {{- include "igloo.provisioner.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["create", "get", "update", "patch", "delete", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims", "namespaces"]
+  verbs: ["create", "get", "delete", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "igloo.provisioner.fullname" . }}
+  labels:
+    {{- include "igloo.provisioner.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "igloo.provisioner.fullname" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "igloo.provisioner.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

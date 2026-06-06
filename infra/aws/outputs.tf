@@ -1,51 +1,35 @@
-output "vpc_id" {
-  value = module.networking.vpc_id
+output "cluster_name" {
+  value = module.eks.cluster_name
 }
 
-output "private_subnet_ids" {
-  value = module.networking.private_subnet_ids
+output "cluster_endpoint" {
+  value = module.eks.cluster_endpoint
 }
 
-output "public_subnet_ids" {
-  value = module.networking.public_subnet_ids
+output "configure_kubectl" {
+  description = "Run this to configure kubectl"
+  value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name}"
 }
 
-output "workspace_sg_id" {
-  value = module.networking.workspace_sg_id
+output "server_irsa_role_arn" {
+  description = "Annotate igloo-server ServiceAccount with this ARN"
+  value       = aws_iam_role.igloo_server.arn
 }
 
-output "lambda_sg_id" {
-  value = module.networking.lambda_sg_id
+output "provisioner_irsa_role_arn" {
+  description = "Annotate igloo-provisioner ServiceAccount with this ARN"
+  value       = aws_iam_role.igloo_provisioner.arn
 }
 
-output "workspaces_table_name" {
-  value = module.state.workspaces_table_name
+output "alb_controller_role_arn" {
+  value = aws_iam_role.alb_controller.arn
 }
 
-output "workspace_data_bucket" {
-  value = module.state.workspace_data_bucket
+output "karpenter_node_role_name" {
+  value = module.karpenter.node_iam_role_name
 }
 
-output "lambda_role_arn" {
-  value = module.iam.lambda_role_arn
-}
-
-output "fargate_execution_role_arn" {
-  value = module.iam.fargate_execution_role_arn
-}
-
-output "fargate_task_role_arn" {
-  value = module.iam.fargate_task_role_arn
-}
-
-output "ecs_cluster_name" {
-  value = module.workspace.ecs_cluster_name
-}
-
-output "ecr_repository_url" {
-  value = module.workspace.ecr_repository_url
-}
-
-output "workspace_task_definition_arn" {
-  value = module.workspace.workspace_task_definition_arn
+output "ebs_csi_role_arn" {
+  description = "IRSA role ARN for the EBS CSI driver"
+  value       = aws_iam_role.ebs_csi.arn
 }

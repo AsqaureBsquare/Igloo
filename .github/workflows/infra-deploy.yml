@@ -1,0 +1,90 @@
+name: Deploy Infrastructure + App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for GitHub OIDC → AWS auth
+  contents: read
+  packages: read    # required to pull GHCR images during helm verify
+
+jobs:
+  infra:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    outputs:
+      cluster_name:         ${{ steps.tf.outputs.cluster_name }}
+      server_irsa_arn:      ${{ steps.tf.outputs.server_irsa_arn }}
+      provisioner_irsa_arn: ${{ steps.tf.outputs.provisioner_irsa_arn }}
+      ebs_csi_arn:          ${{ steps.tf.outputs.ebs_csi_arn }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform init + apply
+        id: tf
+        working-directory: infra/aws
+        run: |
+          terraform init
+          terraform apply -auto-approve
+          echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
+          echo "server_irsa_arn=$(terraform output -raw server_irsa_role_arn)" >> $GITHUB_OUTPUT
+          echo "provisioner_irsa_arn=$(terraform output -raw provisioner_irsa_role_arn)" >> $GITHUB_OUTPUT
+          echo "ebs_csi_arn=$(terraform output -raw ebs_csi_role_arn)" >> $GITHUB_OUTPUT
+
+  deploy:
+    name: Helm Deploy
+    needs: infra
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --region us-east-1 --name ${{ needs.infra.outputs.cluster_name }}
+
+      - name: Install / upgrade EBS CSI addon
+        run: |
+          aws eks create-addon \
+            --cluster-name ${{ needs.infra.outputs.cluster_name }} \
+            --addon-name aws-ebs-csi-driver \
+            --service-account-role-arn ${{ needs.infra.outputs.ebs_csi_arn }} \
+            --resolve-conflicts OVERWRITE 2>/dev/null || \
+          aws eks update-addon \
+            --cluster-name ${{ needs.infra.outputs.cluster_name }} \
+            --addon-name aws-ebs-csi-driver \
+            --service-account-role-arn ${{ needs.infra.outputs.ebs_csi_arn }} \
+            --resolve-conflicts OVERWRITE
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Helm upgrade
+        run: |
+          helm upgrade --install igloo charts/igloo \
+            -f charts/igloo/eks-values.yaml \
+            --set server.jwtSecret=${{ secrets.IGLOO_JWT_SECRET }} \
+            --set provisioner.key=${{ secrets.IGLOO_PROVISIONER_KEY }} \
+            --set "server.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${{ needs.infra.outputs.server_irsa_arn }}" \
+            --set "provisioner.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${{ needs.infra.outputs.provisioner_irsa_arn }}" \
+            --wait --timeout 10m

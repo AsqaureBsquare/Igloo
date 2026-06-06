@@ -48,6 +48,12 @@ spec:
                 secretKeyRef:
                   name: {{ include "igloo.fullname" . }}-secrets
                   key: IGLOO_PROVISIONER_KEY
+            - name: IGLOO_TF_STATE_BUCKET
+              value: {{ .Values.provisioner.workspace.tfStateBucket | quote }}
+            - name: IGLOO_TF_STATE_REGION
+              value: {{ .Values.provisioner.aws.region | quote }}
+            - name: IGLOO_WORKSPACE_IMAGE
+              value: {{ .Values.provisioner.workspace.image | quote }}
             # DynamoDB table names
             - name: IGLOO_DYNAMO_USERS_TABLE
               value: {{ .Values.server.dynamo.usersTable | quote }}

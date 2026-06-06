@@ -34,6 +34,8 @@ spec:
             # Workspace Fargate infrastructure variables
             - name: IGLOO_WORKSPACE_IMAGE
               value: {{ .Values.provisioner.workspace.image | quote }}
+            - name: IGLOO_WORKSPACE_NAMESPACE
+              value: {{ .Values.provisioner.workspace.namespace | default "workspaces" | quote }}
             - name: IGLOO_ECS_CLUSTER
               value: {{ .Values.provisioner.workspace.ecsCluster | quote }}
             - name: IGLOO_ECS_EXECUTION_ROLE_ARN

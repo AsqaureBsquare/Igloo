@@ -193,6 +193,7 @@ type claimResponse struct {
 	JobID         string            `json:"job_id"`
 	Action        string            `json:"action"`
 	RetryCount    int               `json:"retry_count"`
+	Provider      string            `json:"provider"`
 	WorkspaceID   string            `json:"workspace_id"`
 	WorkspaceName string            `json:"workspace_name"`
 	AgentToken    string            `json:"agent_token"`

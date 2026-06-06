@@ -160,6 +160,7 @@ func buildClaimResponse(ctx context.Context, h *Handler, job *models.ProvisionJo
 		JobID:         job.ID,
 		Action:        string(job.Action),
 		RetryCount:    job.RetryCount,
+		Provider:      ws.Provider,
 		WorkspaceID:   ws.ID,
 		WorkspaceName: ws.Name,
 		AgentToken:    ws.AgentToken,

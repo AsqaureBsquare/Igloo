@@ -133,7 +133,7 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ws.Provider == "aws-fargate" {
+	if ws.Provider == "aws-fargate" || ws.Provider == "kubernetes" {
 		// Inject Tailscale: platform API key takes priority (admin configures once),
 		// then fall back to the user's personal auth key.
 		var tsKey, tsHostname string
@@ -186,7 +186,7 @@ func (h *Handler) StopWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ws.Provider == "aws-fargate" {
+	if ws.Provider == "aws-fargate" || ws.Provider == "kubernetes" {
 		if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobStop); err != nil {
 			log.Printf("[workspace] failed to enqueue stop job workspace=%s: %v", ws.ID, err)
 		} else {
@@ -215,7 +215,7 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if ws.Provider == "aws-fargate" {
+	if ws.Provider == "aws-fargate" || ws.Provider == "kubernetes" {
 		ws.Status = models.StatusDeleting
 		ws.UpdatedAt = time.Now()
 		_ = h.Store.UpdateWorkspace(r.Context(), ws)

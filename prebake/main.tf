@@ -8,6 +8,10 @@ terraform {
       source  = "kreuzwerker/docker"
       version = "~> 3.0"
     }
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.31"
+    }
   }
   backend "local" {}
 }

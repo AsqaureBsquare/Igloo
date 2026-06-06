@@ -21,15 +21,10 @@ RUN mkdir -p /run/sshd && \
 
 RUN curl -fsSL https://code-server.dev/install.sh | sh
 
-RUN usermod -l user -d /home/user -m ubuntu && \
-    groupmod -n user ubuntu && \
-    chsh -s /bin/zsh user
-
 COPY --from=builder /app/igloo-agent /usr/local/bin/igloo-agent
 COPY workspace/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 WORKDIR /home/user
-USER user
 
 ENTRYPOINT ["/entrypoint.sh"]

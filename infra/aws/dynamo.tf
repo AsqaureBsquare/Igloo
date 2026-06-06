@@ -7,6 +7,16 @@ resource "aws_dynamodb_table" "igloo_users" {
     name = "id"
     type = "S"
   }
+  attribute {
+    name = "email"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "email-index"
+    hash_key        = "email"
+    projection_type = "ALL"
+  }
 
   tags = { Project = "igloo" }
 }
@@ -19,6 +29,16 @@ resource "aws_dynamodb_table" "igloo_workspaces" {
   attribute {
     name = "id"
     type = "S"
+  }
+  attribute {
+    name = "user_id"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "user-index"
+    hash_key        = "user_id"
+    projection_type = "ALL"
   }
 
   tags = { Project = "igloo" }
@@ -40,17 +60,26 @@ resource "aws_dynamodb_table" "igloo_templates" {
 resource "aws_dynamodb_table" "igloo_ws_jobs" {
   name         = "igloo-ws-jobs"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "workspaceId"
-  range_key    = "id"
-
-  attribute {
-    name = "workspaceId"
-    type = "S"
-  }
+  hash_key     = "id"
 
   attribute {
     name = "id"
     type = "S"
+  }
+  attribute {
+    name = "status"
+    type = "S"
+  }
+  attribute {
+    name = "created_at"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "status-created_at-index"
+    hash_key        = "status"
+    range_key       = "created_at"
+    projection_type = "ALL"
   }
 
   tags = { Project = "igloo" }
@@ -64,6 +93,16 @@ resource "aws_dynamodb_table" "igloo_provisioner_keys" {
   attribute {
     name = "id"
     type = "S"
+  }
+  attribute {
+    name = "token_hash"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "token-hash-index"
+    hash_key        = "token_hash"
+    projection_type = "ALL"
   }
 
   tags = { Project = "igloo" }
@@ -79,10 +118,34 @@ resource "aws_dynamodb_table" "igloo_entities" {
     name = "pk"
     type = "S"
   }
-
   attribute {
     name = "sk"
     type = "S"
+  }
+  attribute {
+    name = "slug"
+    type = "S"
+  }
+  attribute {
+    name = "gsi1pk"
+    type = "S"
+  }
+  attribute {
+    name = "gsi1sk"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "slug-index"
+    hash_key        = "slug"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "gsi1-index"
+    hash_key        = "gsi1pk"
+    range_key       = "gsi1sk"
+    projection_type = "ALL"
   }
 
   tags = { Project = "igloo" }

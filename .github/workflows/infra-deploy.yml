@@ -88,3 +88,31 @@ jobs:
             --set "server.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${{ needs.infra.outputs.server_irsa_arn }}" \
             --set "provisioner.serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${{ needs.infra.outputs.provisioner_irsa_arn }}" \
             --wait --timeout 10m
+
+      - name: Update igloos.cloud DNS to new ALB
+        run: |
+          ALB=$(kubectl get ingress igloo-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "ALB address: $ALB"
+
+          ALB_ZONE=$(aws elbv2 describe-load-balancers \
+            --query "LoadBalancers[?DNSName=='${ALB}'].CanonicalHostedZoneId" \
+            --output text)
+          echo "ALB hosted zone: $ALB_ZONE"
+
+          aws route53 change-resource-record-sets \
+            --hosted-zone-id Z05774773F59CRJ02AR4D \
+            --change-batch "{
+              \"Changes\": [{
+                \"Action\": \"UPSERT\",
+                \"ResourceRecordSet\": {
+                  \"Name\": \"igloos.cloud\",
+                  \"Type\": \"A\",
+                  \"AliasTarget\": {
+                    \"HostedZoneId\": \"${ALB_ZONE}\",
+                    \"DNSName\": \"${ALB}\",
+                    \"EvaluateTargetHealth\": true
+                  }
+                }
+              }]
+            }"
+          echo "DNS updated: igloos.cloud -> ${ALB}"

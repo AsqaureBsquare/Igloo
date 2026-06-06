@@ -146,15 +146,19 @@ func (s *MemoryStore) GetWorkspace(_ context.Context, id string) (*models.Worksp
 	return &cp, nil
 }
 
-func (s *MemoryStore) ListWorkspaces(_ context.Context, userID string) ([]*models.Workspace, error) {
+func (s *MemoryStore) ListWorkspaces(_ context.Context, userID, orgID string) ([]*models.Workspace, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []*models.Workspace
 	for _, w := range s.workspaces {
-		if w.UserID == userID && w.Status != models.StatusDeleted {
-			cp := *w
-			out = append(out, &cp)
+		if w.UserID != userID || w.Status == models.StatusDeleted {
+			continue
 		}
+		if orgID != "" && w.OrgID != orgID {
+			continue
+		}
+		cp := *w
+		out = append(out, &cp)
 	}
 	return out, nil
 }
@@ -202,13 +206,15 @@ func (s *MemoryStore) GetTemplate(_ context.Context, id string) (*models.Templat
 	return &cp, nil
 }
 
-func (s *MemoryStore) ListTemplates(_ context.Context) ([]*models.Template, error) {
+func (s *MemoryStore) ListTemplates(_ context.Context, orgID string) ([]*models.Template, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*models.Template, 0, len(s.templates))
 	for _, t := range s.templates {
-		cp := *t
-		out = append(out, &cp)
+		if t.Builtin || (orgID != "" && t.OrgID == orgID) {
+			cp := *t
+			out = append(out, &cp)
+		}
 	}
 	return out, nil
 }

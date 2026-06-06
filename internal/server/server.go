@@ -88,25 +88,29 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Put("/api/auth/me/ssh-key", h.UpdateSSHKey)
 		r.Put("/api/auth/me/tailscale-key", h.UpdateTailscaleKey)
 
-		r.Get("/api/workspaces", h.ListWorkspaces)
-		r.Post("/api/workspaces", h.CreateWorkspace)
-		r.Get("/api/workspaces/{id}", h.GetWorkspace)
-		r.Post("/api/workspaces/{id}/start", h.StartWorkspace)
-		r.Post("/api/workspaces/{id}/stop", h.StopWorkspace)
-		r.Delete("/api/workspaces/{id}", h.DeleteWorkspace)
-		r.Get("/api/workspaces/{id}/terminal", h.TerminalToken)
+		// Workspace + template routes — org context injected when X-Org-ID header is present.
+		r.Group(func(r chi.Router) {
+			r.Use(h.RequireOrgMember)
 
-		r.Get("/api/templates", h.ListTemplates)
-		r.Get("/api/templates/{id}", h.GetTemplate)
-		r.Get("/api/templates/{id}/files", h.GetTemplateFiles)
-		r.Post("/api/templates", h.CreateTemplate)
-		r.Put("/api/templates/{id}", h.UpdateTemplate)
-		r.Delete("/api/templates/{id}", h.DeleteTemplate)
+			r.Get("/api/workspaces", h.ListWorkspaces)
+			r.Post("/api/workspaces", h.CreateWorkspace)
+			r.Get("/api/workspaces/{id}", h.GetWorkspace)
+			r.Post("/api/workspaces/{id}/start", h.StartWorkspace)
+			r.Post("/api/workspaces/{id}/stop", h.StopWorkspace)
+			r.Delete("/api/workspaces/{id}", h.DeleteWorkspace)
+			r.Get("/api/workspaces/{id}/terminal", h.TerminalToken)
+			r.Get("/api/workspaces/{id}/logs", h.WorkspaceLogs)
+			r.Get("/api/workspaces/{id}/agent-logs", h.AgentLogs)
+			r.Get("/api/workspaces/{id}/vscode-token", h.VScodeToken)
+			r.Get("/api/workspaces/{id}/forward-token", h.ForwardToken)
 
-		r.Get("/api/workspaces/{id}/logs", h.WorkspaceLogs)
-		r.Get("/api/workspaces/{id}/agent-logs", h.AgentLogs)
-		r.Get("/api/workspaces/{id}/vscode-token", h.VScodeToken)
-		r.Get("/api/workspaces/{id}/forward-token", h.ForwardToken)
+			r.Get("/api/templates", h.ListTemplates)
+			r.Get("/api/templates/{id}", h.GetTemplate)
+			r.Get("/api/templates/{id}/files", h.GetTemplateFiles)
+			r.Post("/api/templates", h.CreateTemplate)
+			r.Put("/api/templates/{id}", h.UpdateTemplate)
+			r.Delete("/api/templates/{id}", h.DeleteTemplate)
+		})
 
 		// ─── Organizations & Teams ────────────────────────────────────────────
 		r.Get("/api/orgs", h.ListOrgs)
@@ -324,7 +328,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Org-ID")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

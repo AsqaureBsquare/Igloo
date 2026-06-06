@@ -109,6 +109,7 @@ type mUserDoc struct {
 
 type mWorkspaceDoc struct {
 	ID           string            `bson:"_id"`
+	OrgID        string            `bson:"org_id,omitempty"`
 	UserID       string            `bson:"user_id"`
 	Name         string            `bson:"name"`
 	TemplateID   string            `bson:"template_id"`
@@ -126,6 +127,7 @@ type mWorkspaceDoc struct {
 
 type mTemplateDoc struct {
 	ID          string               `bson:"_id"`
+	OrgID       string               `bson:"org_id,omitempty"`
 	Name        string               `bson:"name"`
 	Description string               `bson:"description"`
 	Provider    string               `bson:"provider"`
@@ -300,10 +302,13 @@ func (s *MongoStore) GetWorkspace(ctx context.Context, id string) (*models.Works
 	return mWsFromDoc(d), nil
 }
 
-func (s *MongoStore) ListWorkspaces(ctx context.Context, userID string) ([]*models.Workspace, error) {
+func (s *MongoStore) ListWorkspaces(ctx context.Context, userID, orgID string) ([]*models.Workspace, error) {
 	filter := bson.M{"status": bson.M{"$ne": "deleted"}}
 	if userID != "" {
 		filter["user_id"] = userID
+	}
+	if orgID != "" {
+		filter["org_id"] = orgID
 	}
 	cur, err := s.workspaces.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}))
@@ -341,7 +346,7 @@ func mWsToDoc(w *models.Workspace) mWorkspaceDoc {
 		meta = map[string]string{}
 	}
 	return mWorkspaceDoc{
-		ID: w.ID, UserID: w.UserID, Name: w.Name,
+		ID: w.ID, OrgID: w.OrgID, UserID: w.UserID, Name: w.Name,
 		TemplateID: w.TemplateID, TemplateName: w.TemplateName, Provider: w.Provider,
 		Status: string(w.Status), AgentToken: w.AgentToken, CostPerHr: w.CostPerHr,
 		CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt, LastActiveAt: w.LastActiveAt,
@@ -351,7 +356,7 @@ func mWsToDoc(w *models.Workspace) mWorkspaceDoc {
 
 func mWsFromDoc(d mWorkspaceDoc) *models.Workspace {
 	return &models.Workspace{
-		ID: d.ID, UserID: d.UserID, Name: d.Name,
+		ID: d.ID, OrgID: d.OrgID, UserID: d.UserID, Name: d.Name,
 		TemplateID: d.TemplateID, TemplateName: d.TemplateName, Provider: d.Provider,
 		Status: models.WorkspaceStatus(d.Status), AgentToken: d.AgentToken, CostPerHr: d.CostPerHr,
 		CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt, LastActiveAt: d.LastActiveAt,
@@ -390,8 +395,14 @@ func (s *MongoStore) GetTemplate(ctx context.Context, id string) (*models.Templa
 	return mTemplateFromDoc(d), nil
 }
 
-func (s *MongoStore) ListTemplates(ctx context.Context) ([]*models.Template, error) {
-	cur, err := s.templates.Find(ctx, bson.M{},
+func (s *MongoStore) ListTemplates(ctx context.Context, orgID string) ([]*models.Template, error) {
+	var filter bson.M
+	if orgID != "" {
+		filter = bson.M{"$or": []bson.M{{"builtin": true}, {"org_id": orgID}}}
+	} else {
+		filter = bson.M{"builtin": true}
+	}
+	cur, err := s.templates.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "name", Value: 1}}))
 	if err != nil {
 		return nil, err
@@ -409,7 +420,7 @@ func (s *MongoStore) ListTemplates(ctx context.Context) ([]*models.Template, err
 
 func mTemplateFromDoc(d mTemplateDoc) *models.Template {
 	return &models.Template{
-		ID: d.ID, Name: d.Name, Description: d.Description, Provider: d.Provider,
+		ID: d.ID, OrgID: d.OrgID, Name: d.Name, Description: d.Description, Provider: d.Provider,
 		Icon: d.Icon, Builtin: d.Builtin, Version: d.Version, Variables: d.Variables, Files: d.Files, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
 }

@@ -7,6 +7,7 @@ const api = (() => {
   async function req(method, path, body) {
     const headers = { 'Content-Type': 'application/json' };
     if (token()) headers['Authorization'] = 'Bearer ' + token();
+    if (state.activeOrgID) headers['X-Org-ID'] = state.activeOrgID;
     const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
     if (res.status === 204) return null;
     const data = await res.json();
@@ -74,7 +75,7 @@ const api = (() => {
 })();
 
 // ─── State ────────────────────────────────────────────────────────────────────
-const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null };
+const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null };
 
 // ─── Provision log streaming ──────────────────────────────────────────────────
 const provLog = {
@@ -521,6 +522,12 @@ function renderShell() {
         <button class="nav-item ${state.view==='org-detail'?'active':''}" onclick="app.setView('org-detail')" style="padding-left:28px;font-size:12px">
           ↳ ${esc(state.currentOrg.name)}
         </button>` : ''}
+        ${state.activeOrgID ? `
+        <div class="active-org-chip" title="Workspaces and templates are scoped to this org">
+          <span class="active-org-dot"></span>
+          ${esc(state.orgs.find(o=>o.id===state.activeOrgID)?.name || state.activeOrgID)}
+          <button class="active-org-clear" onclick="app.clearActiveOrg()" title="Clear org context">✕</button>
+        </div>` : ''}
         ${u?.is_admin ? `
         <span class="nav-section-label">Admin</span>
         <button class="nav-item ${state.view==='users'?'active':''}" onclick="app.setView('users')">
@@ -772,8 +779,13 @@ async function renderOrgDetailView() {
   const org = state.currentOrg;
   if (!org) { app.setView('orgs'); return; }
   document.getElementById('view-title').textContent = org.name;
+  const isActive = state.activeOrgID === org.id;
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-ghost btn-sm" onclick="app.setView('orgs')">← All orgs</button>`;
+    `<button class="btn btn-ghost btn-sm" onclick="app.setView('orgs')">← All orgs</button>
+     ${isActive
+       ? `<button class="btn btn-ghost btn-sm" onclick="app.clearActiveOrg()" style="color:var(--primary)">✓ Active org — clear</button>`
+       : `<button class="btn btn-ghost btn-sm" onclick="app.setActiveOrg('${org.id}')">Set as active org</button>`
+     }`;
   const el = document.getElementById('content');
   el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
 
@@ -1094,6 +1106,33 @@ window.app = {
   openOrg(id) {
     state.currentOrg = state.orgs.find(o => o.id === id) || { id };
     this.setView('org-detail');
+  },
+
+  async setActiveOrg(id) {
+    state.activeOrgID = id;
+    // Reload workspace + template data scoped to the new org.
+    const [templates, workspaces] = await Promise.all([
+      api.templates.list().catch(() => []),
+      api.workspaces.list().catch(() => []),
+    ]);
+    state.templates = templates;
+    state.workspaces = workspaces;
+    toast(`Now scoped to "${state.orgs.find(o=>o.id===id)?.name || id}"`, 'success');
+    renderShell();
+    renderOrgDetailView();
+  },
+
+  async clearActiveOrg() {
+    state.activeOrgID = null;
+    const [templates, workspaces] = await Promise.all([
+      api.templates.list().catch(() => []),
+      api.workspaces.list().catch(() => []),
+    ]);
+    state.templates = templates;
+    state.workspaces = workspaces;
+    toast('Org context cleared — showing all workspaces', 'info');
+    renderShell();
+    renderOrgDetailView();
   },
 
   showCreateOrg() { showCreateOrgModal(); },

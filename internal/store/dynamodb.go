@@ -54,6 +54,7 @@ type userItem struct {
 
 type workspaceItem struct {
 	ID           string            `dynamodbav:"id"`
+	OrgID        string            `dynamodbav:"org_id,omitempty"`
 	UserID       string            `dynamodbav:"user_id"`
 	Name         string            `dynamodbav:"name"`
 	TemplateID   string            `dynamodbav:"template_id"`
@@ -71,6 +72,7 @@ type workspaceItem struct {
 
 type templateItem struct {
 	ID          string               `dynamodbav:"id"`
+	OrgID       string               `dynamodbav:"org_id,omitempty"`
 	Name        string               `dynamodbav:"name"`
 	Description string               `dynamodbav:"description"`
 	Provider    string               `dynamodbav:"provider"`
@@ -92,7 +94,7 @@ func itemToUser(i userItem) *models.User {
 
 func wsToItem(ws *models.Workspace) workspaceItem {
 	return workspaceItem{
-		ID: ws.ID, UserID: ws.UserID, Name: ws.Name,
+		ID: ws.ID, OrgID: ws.OrgID, UserID: ws.UserID, Name: ws.Name,
 		TemplateID: ws.TemplateID, TemplateName: ws.TemplateName,
 		Provider: ws.Provider, Status: string(ws.Status), AgentToken: ws.AgentToken,
 		CostPerHr: ws.CostPerHr, CreatedAt: ws.CreatedAt, UpdatedAt: ws.UpdatedAt,
@@ -109,7 +111,7 @@ func itemToWS(i workspaceItem) *models.Workspace {
 		vars = make(map[string]string)
 	}
 	return &models.Workspace{
-		ID: i.ID, UserID: i.UserID, Name: i.Name,
+		ID: i.ID, OrgID: i.OrgID, UserID: i.UserID, Name: i.Name,
 		TemplateID: i.TemplateID, TemplateName: i.TemplateName,
 		Provider: i.Provider, Status: models.WorkspaceStatus(i.Status), AgentToken: i.AgentToken,
 		CostPerHr: i.CostPerHr, CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt,
@@ -118,10 +120,10 @@ func itemToWS(i workspaceItem) *models.Workspace {
 }
 
 func tplToItem(t *models.Template) templateItem {
-	return templateItem{ID: t.ID, Name: t.Name, Description: t.Description, Provider: t.Provider, Icon: t.Icon, Builtin: t.Builtin, Version: t.Version, Variables: t.Variables, Files: t.Files, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}
+	return templateItem{ID: t.ID, OrgID: t.OrgID, Name: t.Name, Description: t.Description, Provider: t.Provider, Icon: t.Icon, Builtin: t.Builtin, Version: t.Version, Variables: t.Variables, Files: t.Files, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}
 }
 func itemToTpl(i templateItem) *models.Template {
-	return &models.Template{ID: i.ID, Name: i.Name, Description: i.Description, Provider: i.Provider, Icon: i.Icon, Builtin: i.Builtin, Version: i.Version, Variables: i.Variables, Files: i.Files, CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt}
+	return &models.Template{ID: i.ID, OrgID: i.OrgID, Name: i.Name, Description: i.Description, Provider: i.Provider, Icon: i.Icon, Builtin: i.Builtin, Version: i.Version, Variables: i.Variables, Files: i.Files, CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt}
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -254,19 +256,24 @@ func (d *DynamoStore) GetWorkspace(ctx context.Context, id string) (*models.Work
 	return itemToWS(i), nil
 }
 
-func (d *DynamoStore) ListWorkspaces(ctx context.Context, userID string) ([]*models.Workspace, error) {
+func (d *DynamoStore) ListWorkspaces(ctx context.Context, userID, orgID string) ([]*models.Workspace, error) {
+	filterExpr := "#s <> :deleted"
+	exprNames := map[string]string{"#s": "status"}
+	exprVals := map[string]types.AttributeValue{
+		":u":       &types.AttributeValueMemberS{Value: userID},
+		":deleted": &types.AttributeValueMemberS{Value: "deleted"},
+	}
+	if orgID != "" {
+		filterExpr += " AND org_id = :org"
+		exprVals[":org"] = &types.AttributeValueMemberS{Value: orgID}
+	}
 	out, err := d.client.Query(ctx, &dynamodb.QueryInput{
-		TableName:              &d.workspaces,
-		IndexName:              aws.String("user-index"),
-		KeyConditionExpression: aws.String("user_id = :u"),
-		FilterExpression:       aws.String("#s <> :deleted"),
-		ExpressionAttributeNames: map[string]string{
-			"#s": "status",
-		},
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":u":       &types.AttributeValueMemberS{Value: userID},
-			":deleted": &types.AttributeValueMemberS{Value: "deleted"},
-		},
+		TableName:                &d.workspaces,
+		IndexName:                aws.String("user-index"),
+		KeyConditionExpression:   aws.String("user_id = :u"),
+		FilterExpression:         aws.String(filterExpr),
+		ExpressionAttributeNames: exprNames,
+		ExpressionAttributeValues: exprVals,
 	})
 	if err != nil {
 		return nil, err
@@ -331,10 +338,22 @@ func (d *DynamoStore) GetTemplate(ctx context.Context, id string) (*models.Templ
 	return itemToTpl(i), nil
 }
 
-func (d *DynamoStore) ListTemplates(ctx context.Context) ([]*models.Template, error) {
-	out, err := d.client.Scan(ctx, &dynamodb.ScanInput{
-		TableName: &d.templates,
-	})
+func (d *DynamoStore) ListTemplates(ctx context.Context, orgID string) ([]*models.Template, error) {
+	// Return builtin templates plus org-scoped ones if orgID is provided.
+	input := &dynamodb.ScanInput{TableName: &d.templates}
+	if orgID != "" {
+		input.FilterExpression = aws.String("builtin = :t OR org_id = :org")
+		input.ExpressionAttributeValues = map[string]types.AttributeValue{
+			":t":   &types.AttributeValueMemberBOOL{Value: true},
+			":org": &types.AttributeValueMemberS{Value: orgID},
+		}
+	} else {
+		input.FilterExpression = aws.String("builtin = :t")
+		input.ExpressionAttributeValues = map[string]types.AttributeValue{
+			":t": &types.AttributeValueMemberBOOL{Value: true},
+		}
+	}
+	out, err := d.client.Scan(ctx, input)
 	if err != nil {
 		return nil, err
 	}

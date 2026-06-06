@@ -302,6 +302,43 @@ input, textarea { font-family: inherit; }
   border-top: 1px solid var(--border);
 }
 
+.active-org-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 10px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: rgba(0,212,255,0.08);
+  border: 1px solid rgba(0,212,255,0.2);
+  font-size: 11px;
+  color: var(--primary);
+  font-weight: 600;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.active-org-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  flex-shrink: 0;
+  box-shadow: 0 0 4px var(--primary);
+}
+.active-org-clear {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.active-org-clear:hover { color: var(--text); }
+
 .user-pill {
   display: flex;
   align-items: center;

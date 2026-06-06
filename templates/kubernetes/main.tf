@@ -36,7 +36,7 @@ resource "kubernetes_persistent_volume_claim" "workspace" {
   }
   spec {
     access_modes       = ["ReadWriteOnce"]
-    storage_class_name = "gp3"
+    storage_class_name = "gp2"
     resources {
       requests = { storage = var.disk }
     }

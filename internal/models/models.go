@@ -58,6 +58,7 @@ type ProvisionJob struct {
 
 type Workspace struct {
 	ID           string            `json:"id"`
+	OrgID        string            `json:"org_id"`
 	UserID       string            `json:"user_id"`
 	Name         string            `json:"name"`
 	TemplateID   string            `json:"template_id"`
@@ -69,8 +70,8 @@ type Workspace struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`
 	LastActiveAt time.Time         `json:"last_active_at"`
-	Vars         map[string]string `json:"vars,omitempty"`        // user-supplied template variables
-	Meta         map[string]string `json:"meta,omitempty"`        // provider metadata (task ARN, volume ID, etc.)
+	Vars         map[string]string `json:"vars,omitempty"`
+	Meta         map[string]string `json:"meta,omitempty"`
 }
 
 type User struct {
@@ -138,14 +139,15 @@ type TeamMember struct {
 
 type Template struct {
 	ID          string            `json:"id"`
+	OrgID       string            `json:"org_id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	Provider    string            `json:"provider"` // docker, aws-fargate, kubernetes, etc.
+	Provider    string            `json:"provider"`
 	Icon        string            `json:"icon"`
 	Builtin     bool              `json:"builtin"`
 	Version     int               `json:"version"`
 	Variables   []TemplateVar     `json:"variables,omitempty"`
-	Files       map[string]string `json:"files,omitempty"` // filename → terraform source
+	Files       map[string]string `json:"files,omitempty"`
 	CreatedAt   time.Time         `json:"created_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 }

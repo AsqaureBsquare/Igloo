@@ -31,7 +31,7 @@ func loadFilesFromDisk(name string) map[string]string {
 
 // GET /api/templates
 func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
-	templates, err := h.Store.ListTemplates(r.Context())
+	templates, err := h.Store.ListTemplates(r.Context(), ctxOrgID(r))
 	if err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
 		return
@@ -73,6 +73,10 @@ func (h *Handler) GetTemplateFiles(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/templates
 func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
+	if o := ctxOrg(r); o != nil && !requireOrgAdmin(h, w, r) {
+		return
+	}
+
 	var body struct {
 		Name        string               `json:"name"`
 		Description string               `json:"description"`
@@ -89,6 +93,7 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	t := &models.Template{
 		ID:          uuid.NewString(),
+		OrgID:       ctxOrgID(r),
 		Name:        body.Name,
 		Description: body.Description,
 		Provider:    body.Provider,
@@ -110,9 +115,17 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 
 // PUT /api/templates/{id} — update template metadata + files
 func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
+	if o := ctxOrg(r); o != nil && !requireOrgAdmin(h, w, r) {
+		return
+	}
+
 	t, err := h.Store.GetTemplate(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
 		h.err(w, http.StatusNotFound, "template not found")
+		return
+	}
+	if orgID := ctxOrgID(r); orgID != "" && !t.Builtin && t.OrgID != orgID {
+		h.err(w, http.StatusForbidden, "template does not belong to this organization")
 		return
 	}
 
@@ -156,6 +169,10 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /api/templates/{id}
 func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	if o := ctxOrg(r); o != nil && !requireOrgAdmin(h, w, r) {
+		return
+	}
+
 	id := chi.URLParam(r, "id")
 	t, err := h.Store.GetTemplate(r.Context(), id)
 	if err != nil {
@@ -164,6 +181,10 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	if t.Builtin {
 		h.err(w, http.StatusForbidden, "cannot delete built-in template")
+		return
+	}
+	if orgID := ctxOrgID(r); orgID != "" && t.OrgID != orgID {
+		h.err(w, http.StatusForbidden, "template does not belong to this organization")
 		return
 	}
 	if err := h.Store.DeleteTemplate(r.Context(), id); err != nil {

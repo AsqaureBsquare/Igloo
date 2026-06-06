@@ -27,7 +27,7 @@ var upgrader = websocket.Upgrader{
 
 // GET /api/workspaces
 func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
-	ws, err := h.Store.ListWorkspaces(r.Context(), ctxUserID(r))
+	ws, err := h.Store.ListWorkspaces(r.Context(), ctxUserID(r), ctxOrgID(r))
 	if err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
 		return
@@ -67,8 +67,16 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		vars[k] = v
 	}
 
+	orgID := ctxOrgID(r)
+	// Enforce template belongs to this org (or is builtin).
+	if orgID != "" && !tmpl.Builtin && tmpl.OrgID != orgID {
+		h.err(w, http.StatusForbidden, "template does not belong to this organization")
+		return
+	}
+
 	ws := &models.Workspace{
 		ID:           uuid.NewString(),
+		OrgID:        orgID,
 		UserID:       ctxUserID(r),
 		Name:         strings.TrimSpace(body.Name),
 		TemplateID:   tmpl.ID,

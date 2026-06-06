@@ -19,14 +19,16 @@ type Store interface {
 	// Workspaces
 	CreateWorkspace(ctx context.Context, w *models.Workspace) error
 	GetWorkspace(ctx context.Context, id string) (*models.Workspace, error)
-	ListWorkspaces(ctx context.Context, userID string) ([]*models.Workspace, error)
+	// ListWorkspaces returns workspaces for a user in an org. orgID="" returns across all orgs.
+	ListWorkspaces(ctx context.Context, userID, orgID string) ([]*models.Workspace, error)
 	UpdateWorkspace(ctx context.Context, w *models.Workspace) error
 	DeleteWorkspace(ctx context.Context, id string) error
 
 	// Templates
 	UpsertTemplate(ctx context.Context, t *models.Template) error
 	GetTemplate(ctx context.Context, id string) (*models.Template, error)
-	ListTemplates(ctx context.Context) ([]*models.Template, error)
+	// ListTemplates returns builtin templates plus org-scoped ones. orgID="" returns only builtins.
+	ListTemplates(ctx context.Context, orgID string) ([]*models.Template, error)
 	DeleteTemplate(ctx context.Context, id string) error
 
 	// Jobs

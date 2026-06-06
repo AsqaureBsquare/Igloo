@@ -108,13 +108,15 @@ func (s *PostgresStore) GetWorkspace(ctx context.Context, id string) (*models.Wo
 	return scanWorkspace(row)
 }
 
-func (s *PostgresStore) ListWorkspaces(ctx context.Context, userID string) ([]*models.Workspace, error) {
+func (s *PostgresStore) ListWorkspaces(ctx context.Context, userID, orgID string) ([]*models.Workspace, error) {
 	var rows pgx.Rows
 	var err error
 	if userID == "" {
-		rows, err = s.db.Query(ctx, `SELECT id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE status != 'deleted' ORDER BY created_at DESC`)
+		rows, err = s.db.Query(ctx, `SELECT id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE status != 'deleted' ORDER BY created_at DESC`)
+	} else if orgID != "" {
+		rows, err = s.db.Query(ctx, `SELECT id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE user_id=$1 AND org_id=$2 AND status != 'deleted' ORDER BY created_at DESC`, userID, orgID)
 	} else {
-		rows, err = s.db.Query(ctx, `SELECT id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE user_id=$1 AND status != 'deleted' ORDER BY created_at DESC`, userID)
+		rows, err = s.db.Query(ctx, `SELECT id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE user_id=$1 AND status != 'deleted' ORDER BY created_at DESC`, userID)
 	}
 	if err != nil {
 		return nil, err
@@ -165,8 +167,14 @@ func (s *PostgresStore) GetTemplate(ctx context.Context, id string) (*models.Tem
 	return scanTemplate(row)
 }
 
-func (s *PostgresStore) ListTemplates(ctx context.Context) ([]*models.Template, error) {
-	rows, err := s.db.Query(ctx, `SELECT id,name,description,provider,icon,builtin,variables,files,created_at FROM templates ORDER BY name`)
+func (s *PostgresStore) ListTemplates(ctx context.Context, orgID string) ([]*models.Template, error) {
+	var rows pgx.Rows
+	var err error
+	if orgID != "" {
+		rows, err = s.db.Query(ctx, `SELECT id,org_id,name,description,provider,icon,builtin,variables,files,created_at FROM templates WHERE builtin=true OR org_id=$1 ORDER BY name`, orgID)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT id,org_id,name,description,provider,icon,builtin,variables,files,created_at FROM templates WHERE builtin=true ORDER BY name`)
+	}
 	if err != nil {
 		return nil, err
 	}

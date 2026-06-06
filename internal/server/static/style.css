@@ -798,6 +798,8 @@ input, textarea { font-family: inherit; }
 .tpl-list-item .template-icon { margin: 0; font-size: 1.3em; flex-shrink: 0; }
 .tpl-list-item .template-name { font-size: 13px; font-weight: 700; }
 .tpl-list-item .template-desc { font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+.tpl-list-item .template-version { font-size: 10px; color: var(--muted); margin-top: 3px; opacity: 0.7; }
+.tpl-version-bar { font-size: 11px; color: var(--muted); padding: 4px 2px 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; }
 
 .templates-code {
   background: rgba(7,24,40,0.6);

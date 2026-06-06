@@ -86,7 +86,13 @@ func Run(ctx context.Context, in Input, action Action) (map[string]string, error
 	run := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "terraform", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), "TF_IN_AUTOMATION=1", "TF_INPUT=false")
+		cmd.Env = append(os.Environ(),
+			"TF_IN_AUTOMATION=1",
+			"TF_INPUT=false",
+			"IGLOO_AGENT_TOKEN="+in.Vars["agent_token"],
+			"IGLOO_SERVER_URL="+in.Vars["server_url"],
+			"IGLOO_WORKSPACE_ID="+in.Vars["workspace_id"],
+		)
 		logLine(fmt.Sprintf("[provisioner] terraform %s", strings.Join(args, " ")))
 
 		if in.LogFunc != nil {

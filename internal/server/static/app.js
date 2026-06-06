@@ -602,6 +602,7 @@ function renderTemplatesView(selectedId) {
         <div style="flex:1;min-width:0">
           <div class="template-name">${esc(t.name)}</div>
           <div class="template-desc">${esc(t.description)}</div>
+          <div class="template-version">v${t.version || 1}${t.updated_at ? ` · ${timeAgo(t.updated_at)}` : ''}</div>
         </div>
         ${isAdmin ? `<button class="btn btn-ghost btn-sm" style="flex-shrink:0" onclick="event.stopPropagation();app.editTemplate('${t.id}')">Edit</button>` : ''}
       </div>`).join('')}
@@ -1247,7 +1248,9 @@ window.app = {
       const files = await api.templates.files(id);
       const entries = Object.entries(files).sort(([a],[b]) => a.localeCompare(b));
       if (!entries.length) { codeEl.innerHTML = `<div class="tpl-code-loading">No Terraform files.</div>`; return; }
-      codeEl.innerHTML = entries.map(([name, content]) => `
+      const tpl = state.templates.find(t => t.id === id);
+      const versionBar = tpl ? `<div class="tpl-version-bar">v${tpl.version || 1}${tpl.updated_at ? ` · updated ${timeAgo(tpl.updated_at)}` : ''}</div>` : '';
+      codeEl.innerHTML = versionBar + entries.map(([name, content]) => `
         <div class="tf-file">
           <div class="tf-file-name">${esc(name)}</div>
           <pre class="tf-code">${esc(content)}</pre>

@@ -71,7 +71,7 @@ provisioner:
     region: us-east-1
 
   workspace:
-    image: 601804669600.dkr.ecr.us-east-1.amazonaws.com/igloo-workspace:latest
+    image: ghcr.io/asqaurebsquare/igloo-workspace:main
     tfStateBucket: igloo-ws-state-601804669600
 
   serviceAccount:

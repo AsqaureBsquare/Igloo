@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = "~> 2.31"
     }
+    igloo = {
+      source  = "AsqaureBsquare/igloo"
+      version = "~> 0.1"
+    }
   }
   backend "local" {}
 }

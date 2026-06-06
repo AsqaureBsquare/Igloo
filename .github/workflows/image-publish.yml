@@ -19,6 +19,8 @@ jobs:
             dockerfile: Dockerfile
           - name: igloo-provisioner
             dockerfile: Dockerfile.provisioner
+          - name: igloo-workspace
+            dockerfile: Dockerfile.workspace
 
     steps:
       - uses: actions/checkout@v4

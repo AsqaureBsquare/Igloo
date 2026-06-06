@@ -1,18 +1,18 @@
 #!/bin/bash
 set -e
 
-WORKSPACE=/workspace
+WORKSPACE="${WORKSPACE_DIR:-/home/user}"
 
-# First-run initialization (EBS volume is freshly formatted)
+# First-run initialization (PVC is freshly provisioned)
 if [ ! -f "$WORKSPACE/.igloo-initialized" ]; then
     echo "[igloo] Initializing workspace..."
-    mkdir -p "$WORKSPACE"/{projects,home,.config,.ssh}
+    mkdir -p "$WORKSPACE"/{projects,.config,.ssh}
     chmod 700 "$WORKSPACE/.ssh"
     echo "Initialized at $(date -u)" > "$WORKSPACE/.igloo-initialized"
     echo "[igloo] Workspace initialized."
 fi
 
-# Generate persistent SSH host keys on EBS (survives sleep/wake)
+# Generate persistent SSH host keys on PVC (survives sleep/wake)
 if [ ! -f "$WORKSPACE/.ssh/ssh_host_ed25519_key" ]; then
     ssh-keygen -q -t ed25519 -f "$WORKSPACE/.ssh/ssh_host_ed25519_key" -N ""
     ssh-keygen -q -t rsa -b 4096 -f "$WORKSPACE/.ssh/ssh_host_rsa_key" -N ""
@@ -27,11 +27,8 @@ else
     echo "[igloo] WARNING: no SSH key provided — SSH will reject all connections."
 fi
 
-# /run/sshd may not exist if /run is a tmpfs (common in containers)
 mkdir -p /run/sshd
 
-# Start sshd in foreground mode (-D) as a background process so errors
-# appear in CloudWatch logs instead of dying silently.
 /usr/sbin/sshd -D -e -f /etc/ssh/igloo_sshd_config &
 SSHD_PID=$!
 sleep 0.5
@@ -43,9 +40,6 @@ fi
 
 echo "[igloo] Workspace ready."
 
-# ── igloo-agent ───────────────────────────────────────────────────────────────
-# Tailscale is handled inside igloo-agent via embedded tsnet — no separate
-# tailscaled process needed.
 if [ -x /usr/local/bin/igloo-agent ] && [ -n "${IGLOO_SERVER_URL:-}" ]; then
     echo "[igloo] Starting igloo-agent..."
     /usr/local/bin/igloo-agent &

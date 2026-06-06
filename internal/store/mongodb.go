@@ -131,9 +131,11 @@ type mTemplateDoc struct {
 	Provider    string               `bson:"provider"`
 	Icon        string               `bson:"icon"`
 	Builtin     bool                 `bson:"builtin"`
+	Version     int                  `bson:"version"`
 	Variables   []models.TemplateVar `bson:"variables"`
 	Files       map[string]string    `bson:"files"`
 	CreatedAt   time.Time            `bson:"created_at"`
+	UpdatedAt   time.Time            `bson:"updated_at"`
 }
 
 type mJobDoc struct {
@@ -370,7 +372,7 @@ func (s *MongoStore) UpsertTemplate(ctx context.Context, t *models.Template) err
 	}
 	doc := mTemplateDoc{
 		ID: t.ID, Name: t.Name, Description: t.Description, Provider: t.Provider,
-		Icon: t.Icon, Builtin: t.Builtin, Variables: vars, Files: files, CreatedAt: t.CreatedAt,
+		Icon: t.Icon, Builtin: t.Builtin, Version: t.Version, Variables: vars, Files: files, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt,
 	}
 	_, err := s.templates.ReplaceOne(ctx, bson.M{"_id": t.ID}, doc,
 		options.Replace().SetUpsert(true))
@@ -408,8 +410,13 @@ func (s *MongoStore) ListTemplates(ctx context.Context) ([]*models.Template, err
 func mTemplateFromDoc(d mTemplateDoc) *models.Template {
 	return &models.Template{
 		ID: d.ID, Name: d.Name, Description: d.Description, Provider: d.Provider,
-		Icon: d.Icon, Builtin: d.Builtin, Variables: d.Variables, Files: d.Files, CreatedAt: d.CreatedAt,
+		Icon: d.Icon, Builtin: d.Builtin, Version: d.Version, Variables: d.Variables, Files: d.Files, CreatedAt: d.CreatedAt, UpdatedAt: d.UpdatedAt,
 	}
+}
+
+func (s *MongoStore) DeleteTemplate(ctx context.Context, id string) error {
+	_, err := s.templates.DeleteOne(ctx, bson.M{"_id": id})
+	return err
 }
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────

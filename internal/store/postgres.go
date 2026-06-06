@@ -181,6 +181,11 @@ func (s *PostgresStore) ListTemplates(ctx context.Context) ([]*models.Template, 
 	return out, rows.Err()
 }
 
+func (s *PostgresStore) DeleteTemplate(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM templates WHERE id=$1`, id)
+	return err
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 func (s *PostgresStore) CreateJob(ctx context.Context, j *models.ProvisionJob) error {

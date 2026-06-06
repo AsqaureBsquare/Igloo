@@ -86,6 +86,7 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now()
 	t := &models.Template{
 		ID:          uuid.NewString(),
 		Name:        body.Name,
@@ -94,7 +95,9 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		Icon:        body.Icon,
 		Variables:   body.Variables,
 		Files:       body.Files,
-		CreatedAt:   time.Now(),
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 
 	if err := h.Store.UpsertTemplate(r.Context(), t); err != nil {
@@ -105,7 +108,7 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 	h.json(w, http.StatusCreated, t)
 }
 
-// PUT /api/templates/{id} — update template metadata + files (admin only)
+// PUT /api/templates/{id} — update template metadata + files
 func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	t, err := h.Store.GetTemplate(r.Context(), chi.URLParam(r, "id"))
 	if err != nil {
@@ -140,6 +143,8 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	if body.Files != nil {
 		t.Files = body.Files
 	}
+	t.Version++
+	t.UpdatedAt = time.Now()
 
 	if err := h.Store.UpsertTemplate(r.Context(), t); err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
@@ -147,4 +152,23 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.json(w, http.StatusOK, t)
+}
+
+// DELETE /api/templates/{id}
+func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	t, err := h.Store.GetTemplate(r.Context(), id)
+	if err != nil {
+		h.err(w, http.StatusNotFound, "template not found")
+		return
+	}
+	if t.Builtin {
+		h.err(w, http.StatusForbidden, "cannot delete built-in template")
+		return
+	}
+	if err := h.Store.DeleteTemplate(r.Context(), id); err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

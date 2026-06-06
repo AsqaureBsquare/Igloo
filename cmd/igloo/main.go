@@ -48,6 +48,8 @@ func main() {
 		runProxy(os.Args[2:])
 	case "provisioner-keys", "pkeys":
 		runProvisionerKeys(os.Args[2:])
+	case "templates", "tpl":
+		runTemplates(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("igloo %s\n", version)
 	default:
@@ -66,6 +68,7 @@ Usage:
   igloo config-ssh                          Write SSH config for direct ssh use
   igloo proxy <workspace-name|id>           SSH ProxyCommand (used by config-ssh)
   igloo provisioner-keys <subcommand>       Manage provisioner keys (admin)
+  igloo templates <subcommand>              Manage workspace templates
   igloo version                             Print version
 
 SSH (two options):
@@ -734,4 +737,203 @@ func mustLoadSession() *session {
 		os.Exit(1)
 	}
 	return sess
+}
+
+// ─── templates subcommand ─────────────────────────────────────────────────────
+
+func runTemplates(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo templates <push|ls|rm>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "push":
+		runTemplatesPush(args[1:])
+	case "ls", "list":
+		runTemplatesList()
+	case "rm", "delete", "remove":
+		runTemplatesDelete(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+// igloo templates push <dir> [--name <name>] [--id <id>] [--provider <provider>]
+func runTemplatesPush(args []string) {
+	var dir, name, id, provider, description, icon string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				name = args[i+1]
+				i++
+			}
+		case "--id":
+			if i+1 < len(args) {
+				id = args[i+1]
+				i++
+			}
+		case "--provider":
+			if i+1 < len(args) {
+				provider = args[i+1]
+				i++
+			}
+		case "--description":
+			if i+1 < len(args) {
+				description = args[i+1]
+				i++
+			}
+		case "--icon":
+			if i+1 < len(args) {
+				icon = args[i+1]
+				i++
+			}
+		default:
+			if !strings.HasPrefix(args[i], "--") && dir == "" {
+				dir = args[i]
+			}
+		}
+	}
+	if dir == "" {
+		fmt.Fprintln(os.Stderr, "Usage: igloo templates push <dir> [--name <name>] [--id <id>] [--provider <provider>]")
+		os.Exit(1)
+	}
+
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		log.Fatalf("invalid path: %v", err)
+	}
+
+	entries, err := os.ReadDir(absDir)
+	if err != nil {
+		log.Fatalf("cannot read directory %s: %v", absDir, err)
+	}
+
+	files := make(map[string]string)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(e.Name())
+		if ext != ".tf" && ext != ".tfvars" && ext != ".json" {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(absDir, e.Name()))
+		if err != nil {
+			log.Fatalf("read %s: %v", e.Name(), err)
+		}
+		files[e.Name()] = string(data)
+	}
+	if len(files) == 0 {
+		log.Fatalf("no .tf files found in %s", absDir)
+	}
+
+	if name == "" {
+		name = filepath.Base(absDir)
+	}
+	if provider == "" {
+		provider = "kubernetes"
+	}
+
+	sess := mustLoadSession()
+
+	// If id is given, update that template; otherwise create a new one.
+	var method, url string
+	if id != "" {
+		method = "PUT"
+		url = sess.ServerURL + "/api/templates/" + id
+	} else {
+		method = "POST"
+		url = sess.ServerURL + "/api/templates"
+	}
+
+	payload := map[string]any{
+		"name":        name,
+		"provider":    provider,
+		"description": description,
+		"icon":        icon,
+		"files":       files,
+	}
+	body, _ := json.Marshal(payload)
+	req, _ := http.NewRequest(method, url, bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", result["error"])
+		os.Exit(1)
+	}
+
+	action := "updated"
+	if method == "POST" {
+		action = "created"
+	}
+	fmt.Printf("Template %s\n", action)
+	fmt.Printf("  ID:       %v\n", result["id"])
+	fmt.Printf("  Name:     %v\n", result["name"])
+	fmt.Printf("  Provider: %v\n", result["provider"])
+	fmt.Printf("  Version:  %v\n", result["version"])
+	fmt.Printf("  Files:    %d uploaded\n", len(files))
+}
+
+func runTemplatesList() {
+	sess := mustLoadSession()
+	req, _ := http.NewRequest("GET", sess.ServerURL+"/api/templates", nil)
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var templates []map[string]any
+	json.NewDecoder(resp.Body).Decode(&templates)
+
+	if len(templates) == 0 {
+		fmt.Println("No templates.")
+		return
+	}
+
+	fmt.Printf("%-36s  %-20s  %-15s  %s\n", "ID", "NAME", "PROVIDER", "VERSION")
+	fmt.Println(strings.Repeat("-", 80))
+	for _, t := range templates {
+		ver := "1"
+		if v, ok := t["version"]; ok {
+			ver = fmt.Sprintf("%.0f", v)
+		}
+		fmt.Printf("%-36s  %-20s  %-15s  %s\n", t["id"], t["name"], t["provider"], ver)
+	}
+}
+
+func runTemplatesDelete(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo templates rm <id>")
+		os.Exit(1)
+	}
+	id := args[0]
+	sess := mustLoadSession()
+	req, _ := http.NewRequest("DELETE", sess.ServerURL+"/api/templates/"+id, nil)
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent {
+		fmt.Printf("Template %s deleted.\n", id)
+	} else {
+		fmt.Fprintf(os.Stderr, "Failed to delete template (HTTP %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
 }

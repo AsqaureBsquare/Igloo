@@ -76,9 +76,11 @@ type templateItem struct {
 	Provider    string               `dynamodbav:"provider"`
 	Icon        string               `dynamodbav:"icon"`
 	Builtin     bool                 `dynamodbav:"builtin"`
+	Version     int                  `dynamodbav:"version"`
 	Variables   []models.TemplateVar `dynamodbav:"variables"`
 	Files       map[string]string    `dynamodbav:"files"`
 	CreatedAt   time.Time            `dynamodbav:"created_at"`
+	UpdatedAt   time.Time            `dynamodbav:"updated_at"`
 }
 
 func userToItem(u *models.User) userItem {
@@ -116,10 +118,10 @@ func itemToWS(i workspaceItem) *models.Workspace {
 }
 
 func tplToItem(t *models.Template) templateItem {
-	return templateItem{ID: t.ID, Name: t.Name, Description: t.Description, Provider: t.Provider, Icon: t.Icon, Builtin: t.Builtin, Variables: t.Variables, Files: t.Files, CreatedAt: t.CreatedAt}
+	return templateItem{ID: t.ID, Name: t.Name, Description: t.Description, Provider: t.Provider, Icon: t.Icon, Builtin: t.Builtin, Version: t.Version, Variables: t.Variables, Files: t.Files, CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt}
 }
 func itemToTpl(i templateItem) *models.Template {
-	return &models.Template{ID: i.ID, Name: i.Name, Description: i.Description, Provider: i.Provider, Icon: i.Icon, Builtin: i.Builtin, Variables: i.Variables, Files: i.Files, CreatedAt: i.CreatedAt}
+	return &models.Template{ID: i.ID, Name: i.Name, Description: i.Description, Provider: i.Provider, Icon: i.Icon, Builtin: i.Builtin, Version: i.Version, Variables: i.Variables, Files: i.Files, CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt}
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -344,6 +346,14 @@ func (d *DynamoStore) ListTemplates(ctx context.Context) ([]*models.Template, er
 		}
 	}
 	return templates, nil
+}
+
+func (d *DynamoStore) DeleteTemplate(ctx context.Context, id string) error {
+	_, err := d.client.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: &d.templates,
+		Key:       strKey("id", id),
+	})
+	return err
 }
 
 func strKey(name, value string) map[string]types.AttributeValue {

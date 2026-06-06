@@ -101,6 +101,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Get("/api/templates/{id}/files", h.GetTemplateFiles)
 		r.Post("/api/templates", h.CreateTemplate)
 		r.Put("/api/templates/{id}", h.UpdateTemplate)
+		r.Delete("/api/templates/{id}", h.DeleteTemplate)
 
 		r.Get("/api/workspaces/{id}/logs", h.WorkspaceLogs)
 		r.Get("/api/workspaces/{id}/agent-logs", h.AgentLogs)
@@ -203,6 +204,9 @@ func (s *Server) BootstrapProvisionerKey(ctx context.Context) {
 }
 
 func (s *Server) SeedBuiltinTemplates(ctx context.Context) {
+	if os.Getenv("IGLOO_SEED_TEMPLATES") != "true" {
+		return
+	}
 	templates := []*models.Template{
 		{
 			ID:          "tpl-kubernetes",

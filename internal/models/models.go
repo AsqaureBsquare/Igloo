@@ -140,12 +140,14 @@ type Template struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
 	Description string            `json:"description"`
-	Provider    string            `json:"provider"` // docker, aws-fargate, gcp-cloudrun, fly
+	Provider    string            `json:"provider"` // docker, aws-fargate, kubernetes, etc.
 	Icon        string            `json:"icon"`
 	Builtin     bool              `json:"builtin"`
+	Version     int               `json:"version"`
 	Variables   []TemplateVar     `json:"variables,omitempty"`
 	Files       map[string]string `json:"files,omitempty"` // filename → terraform source
 	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 // PlatformConfig holds admin-managed platform-level settings (stored in the users table).

@@ -213,6 +213,16 @@ func (s *MemoryStore) ListTemplates(_ context.Context) ([]*models.Template, erro
 	return out, nil
 }
 
+func (s *MemoryStore) DeleteTemplate(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.templates[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.templates, id)
+	return nil
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 func (s *MemoryStore) CreateJob(_ context.Context, j *models.ProvisionJob) error {

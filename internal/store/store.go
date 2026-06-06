@@ -27,6 +27,7 @@ type Store interface {
 	UpsertTemplate(ctx context.Context, t *models.Template) error
 	GetTemplate(ctx context.Context, id string) (*models.Template, error)
 	ListTemplates(ctx context.Context) ([]*models.Template, error)
+	DeleteTemplate(ctx context.Context, id string) error
 
 	// Jobs
 	CreateJob(ctx context.Context, j *models.ProvisionJob) error

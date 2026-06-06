@@ -98,7 +98,7 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	email, name, groups, err := h.OIDC.Exchange(r.Context(), code)
+	email, name, groups, roles, err := h.OIDC.Exchange(r.Context(), code)
 	if err != nil {
 		http.Redirect(w, r, "/?oidc_error="+err.Error(), http.StatusFound)
 		return
@@ -127,8 +127,8 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Full Coder-style group sync on every login.
-	h.syncOIDCGroups(r.Context(), user, groups)
+	// Full Coder-style group + role sync on every login.
+	h.syncOIDCGroups(r.Context(), user, groups, roles)
 
 	tok, err := h.Auth.SignUser(user.ID, user.Email)
 	if err != nil {
@@ -296,14 +296,13 @@ func (h *Handler) UpdateTailscaleKey(w http.ResponseWriter, r *http.Request) {
 	h.json(w, http.StatusOK, user)
 }
 
-// syncOIDCGroups is the full Coder-style group sync run on every OIDC login:
+// syncOIDCGroups is the full Coder-style group + role sync run on every OIDC login:
 //
-//  1. Find all orgs whose GroupClaims intersect the user's IdP groups.
-//  2. Add the user to qualifying orgs; remove them from orgs they no longer qualify for.
-//  3. Within each qualifying org, resolve which team each IdP group maps to
-//     (using GroupMapping for renames, GroupAutoCreate to create missing teams).
-//  4. Sync team memberships: add new, remove stale.
-func (h *Handler) syncOIDCGroups(ctx context.Context, user *models.User, groups []string) {
+//  1. Always add the user to any org marked IsDefault.
+//  2. Find all orgs whose GroupClaims intersect the user's IdP groups.
+//  3. Add the user to qualifying orgs with the correct role (via RoleMapping); remove from non-qualifying.
+//  4. Within each qualifying org, resolve which team each IdP group maps to and sync memberships.
+func (h *Handler) syncOIDCGroups(ctx context.Context, user *models.User, groups, roles []string) {
 	groupSet := make(map[string]struct{}, len(groups))
 	for _, g := range groups {
 		groupSet[strings.ToLower(g)] = struct{}{}
@@ -321,19 +320,9 @@ func (h *Handler) syncOIDCGroups(ctx context.Context, user *models.User, groups 
 		currentOrgIDs[m.OrgID] = struct{}{}
 	}
 
-	qualifyingOrgIDs := make(map[string]struct{})
-
 	for _, org := range allOrgs {
-		if len(org.GroupClaims) == 0 {
-			// Org has no group sync configured — skip (don't touch membership).
-			continue
-		}
-		qualifies := hasGroupOverlap(org.GroupClaims, groups)
-
-		if qualifies {
-			qualifyingOrgIDs[org.ID] = struct{}{}
-
-			// Add to org if not already a member.
+		// Default org — add every OIDC user automatically, never remove.
+		if org.IsDefault {
 			if _, already := currentOrgIDs[org.ID]; !already {
 				_ = h.Store.AddOrgMember(ctx, &models.OrgMember{
 					OrgID:     org.ID,
@@ -344,16 +333,63 @@ func (h *Handler) syncOIDCGroups(ctx context.Context, user *models.User, groups 
 					JoinedAt:  time.Now(),
 				})
 			}
+			continue
+		}
 
-			// Sync teams within this org.
+		if len(org.GroupClaims) == 0 {
+			// No group sync configured — skip.
+			continue
+		}
+
+		qualifies := hasGroupOverlap(org.GroupClaims, groups)
+		if qualifies {
+			role := resolveOrgRole(org.RoleMapping, roles)
+			if _, already := currentOrgIDs[org.ID]; !already {
+				_ = h.Store.AddOrgMember(ctx, &models.OrgMember{
+					OrgID:     org.ID,
+					UserID:    user.ID,
+					UserEmail: user.Email,
+					UserName:  user.Name,
+					Role:      role,
+					JoinedAt:  time.Now(),
+				})
+			} else {
+				// Already a member — update role in case it changed in the IdP.
+				_ = h.Store.UpdateOrgMember(ctx, &models.OrgMember{
+					OrgID:     org.ID,
+					UserID:    user.ID,
+					UserEmail: user.Email,
+					UserName:  user.Name,
+					Role:      role,
+					JoinedAt:  time.Now(),
+				})
+			}
 			h.syncOrgTeams(ctx, org, user, groupSet)
 		} else {
-			// User no longer qualifies — remove from org if they were auto-synced.
+			// User no longer qualifies — remove.
 			if _, wasMember := currentOrgIDs[org.ID]; wasMember {
 				_ = h.Store.RemoveOrgMember(ctx, org.ID, user.ID)
 			}
 		}
 	}
+}
+
+// resolveOrgRole picks the highest role the user qualifies for based on their
+// IdP roles and the org's RoleMapping. Falls back to OrgRoleMember.
+func resolveOrgRole(mapping map[string]models.OrgRole, idpRoles []string) models.OrgRole {
+	role := models.OrgRoleMember
+	for _, idpRole := range idpRoles {
+		if mapped, ok := mapping[strings.ToLower(idpRole)]; ok {
+			// Escalate: admin > member > viewer
+			if mapped == models.OrgRoleAdmin {
+				return models.OrgRoleAdmin
+			}
+			if mapped == models.OrgRoleMember && role == models.OrgRoleViewer {
+				role = models.OrgRoleMember
+			}
+		}
+	}
+	return role
 }
 
 // syncOrgTeams syncs team membership for one org based on the user's group set.

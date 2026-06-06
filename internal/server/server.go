@@ -48,6 +48,8 @@ func New(st store.Store, a *auth.Auth) *Server {
 			ClientSecret: os.Getenv("IGLOO_OIDC_CLIENT_SECRET"),
 			RedirectURL:  os.Getenv("IGLOO_OIDC_REDIRECT_URL"),
 			Scopes:       scopes,
+			GroupsClaim:  os.Getenv("IGLOO_OIDC_GROUPS_CLAIM"), // default: "groups"
+			RolesClaim:   os.Getenv("IGLOO_OIDC_ROLES_CLAIM"),  // default: "roles"
 			ButtonText:   os.Getenv("IGLOO_OIDC_BUTTON_TEXT"),
 			IconURL:      os.Getenv("IGLOO_OIDC_ICON_URL"),
 		}

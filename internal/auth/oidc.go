@@ -19,6 +19,9 @@ type OIDCConfig struct {
 	ClientSecret string
 	RedirectURL  string // must match the redirect URI registered with the IdP
 	Scopes       []string
+	// Claim names — defaults work for most IdPs; Ping/AD may use different names
+	GroupsClaim string // default: "groups"
+	RolesClaim  string // default: "roles"
 	// Display
 	ButtonText string // defaults to "Sign in with SSO"
 	IconURL    string
@@ -84,59 +87,102 @@ func (o *OIDCProvider) AuthCodeURL(state string) string {
 
 // Exchange exchanges the authorization code for an ID token and returns the
 // user's email, display name, and group memberships. email is always lowercased.
-func (o *OIDCProvider) Exchange(ctx context.Context, code string) (email, name string, groups []string, err error) {
+// Exchange exchanges the authorization code for an ID token and returns the
+// user's email, display name, group memberships, and roles. email is always lowercased.
+func (o *OIDCProvider) Exchange(ctx context.Context, code string) (email, name string, groups, roles []string, err error) {
 	oaToken, err := o.oauth.Exchange(ctx, code)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("oidc: code exchange: %w", err)
+		return "", "", nil, nil, fmt.Errorf("oidc: code exchange: %w", err)
 	}
 
-	// Extract and verify the ID token from the OAuth2 token response.
 	rawID, ok := oaToken.Extra("id_token").(string)
 	if !ok {
-		return "", "", nil, errors.New("oidc: no id_token in token response")
+		return "", "", nil, nil, errors.New("oidc: no id_token in token response")
 	}
 	idToken, err := o.verifier.Verify(ctx, rawID)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("oidc: verify id_token: %w", err)
+		return "", "", nil, nil, fmt.Errorf("oidc: verify id_token: %w", err)
 	}
 
-	// Merge claims: start with ID token claims, overlay with UserInfo claims.
-	var claims struct {
-		Email         string   `json:"email"`
-		EmailVerified bool     `json:"email_verified"`
-		Name          string   `json:"name"`
-		GivenName     string   `json:"given_name"`
-		FamilyName    string   `json:"family_name"`
-		PreferredName string   `json:"preferred_username"`
-		Groups        []string `json:"groups"`
-	}
-	if err := idToken.Claims(&claims); err != nil {
-		return "", "", nil, fmt.Errorf("oidc: parse id_token claims: %w", err)
+	// Parse all claims into a raw map so we can read dynamic claim names.
+	var raw map[string]any
+	if err := idToken.Claims(&raw); err != nil {
+		return "", "", nil, nil, fmt.Errorf("oidc: parse id_token claims: %w", err)
 	}
 
 	// Try UserInfo endpoint for fresher claims (some IdPs only put basics in the ID token).
 	userInfo, uiErr := o.provider.UserInfo(ctx, oauth2.StaticTokenSource(oaToken))
 	if uiErr == nil {
-		_ = userInfo.Claims(&claims)
+		var uiRaw map[string]any
+		if userInfo.Claims(&uiRaw) == nil {
+			for k, v := range uiRaw {
+				raw[k] = v
+			}
+		}
 	}
 
-	if claims.Email == "" {
-		return "", "", nil, errors.New("oidc: no email claim in id_token or userinfo")
+	email = strings.ToLower(strings.TrimSpace(strVal(raw, "email")))
+	if email == "" {
+		return "", "", nil, nil, errors.New("oidc: no email claim in id_token or userinfo")
 	}
 
-	// Derive display name from best available claim.
-	displayName := claims.Name
+	displayName := strVal(raw, "name")
 	if displayName == "" {
-		displayName = strings.TrimSpace(claims.GivenName + " " + claims.FamilyName)
+		displayName = strings.TrimSpace(strVal(raw, "given_name") + " " + strVal(raw, "family_name"))
 	}
 	if displayName == "" {
-		displayName = claims.PreferredName
+		displayName = strVal(raw, "preferred_username")
 	}
 	if displayName == "" {
-		displayName = claims.Email
+		displayName = email
 	}
 
-	return strings.ToLower(strings.TrimSpace(claims.Email)), displayName, claims.Groups, nil
+	groupsClaim := o.cfg.GroupsClaim
+	if groupsClaim == "" {
+		groupsClaim = "groups"
+	}
+	rolesClaim := o.cfg.RolesClaim
+	if rolesClaim == "" {
+		rolesClaim = "roles"
+	}
+
+	return email, displayName, strSlice(raw, groupsClaim), strSlice(raw, rolesClaim), nil
+}
+
+// strVal extracts a string value from a raw claims map.
+func strVal(m map[string]any, key string) string {
+	if v, ok := m[key]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// strSlice extracts a []string from a raw claims map (handles []interface{} from JSON).
+func strSlice(m map[string]any, key string) []string {
+	v, ok := m[key]
+	if !ok {
+		return nil
+	}
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		if t == "" {
+			return nil
+		}
+		return []string{t}
+	}
+	return nil
 }
 
 // ButtonText returns the label to show on the login button.

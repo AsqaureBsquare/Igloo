@@ -55,11 +55,13 @@ func (h *Handler) ListOrgs(w http.ResponseWriter, r *http.Request) {
 // POST /api/orgs
 func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name            string            `json:"name"`
-		Description     string            `json:"description"`
-		GroupClaims     []string          `json:"group_claims"`
-		GroupMapping    map[string]string `json:"group_mapping"`
-		GroupAutoCreate bool              `json:"group_auto_create"`
+		Name            string                      `json:"name"`
+		Description     string                      `json:"description"`
+		IsDefault       bool                        `json:"is_default"`
+		GroupClaims     []string                    `json:"group_claims"`
+		GroupMapping    map[string]string           `json:"group_mapping"`
+		GroupAutoCreate bool                        `json:"group_auto_create"`
+		RoleMapping     map[string]models.OrgRole   `json:"role_mapping"`
 	}
 	if err := h.decode(r, &body); err != nil || body.Name == "" {
 		h.err(w, http.StatusBadRequest, "name is required")
@@ -71,9 +73,11 @@ func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 		Name:            strings.TrimSpace(body.Name),
 		Slug:            toSlug(body.Name),
 		Description:     body.Description,
+		IsDefault:       body.IsDefault,
 		GroupClaims:     body.GroupClaims,
 		GroupMapping:    body.GroupMapping,
 		GroupAutoCreate: body.GroupAutoCreate,
+		RoleMapping:     body.RoleMapping,
 		CreatedBy:       userID,
 		CreatedAt:       time.Now(),
 	}
@@ -111,11 +115,13 @@ func (h *Handler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name            string            `json:"name"`
-		Description     string            `json:"description"`
-		GroupClaims     []string          `json:"group_claims"`
-		GroupMapping    map[string]string `json:"group_mapping"`
-		GroupAutoCreate *bool             `json:"group_auto_create"`
+		Name            string                    `json:"name"`
+		Description     string                    `json:"description"`
+		IsDefault       *bool                     `json:"is_default"`
+		GroupClaims     []string                  `json:"group_claims"`
+		GroupMapping    map[string]string         `json:"group_mapping"`
+		GroupAutoCreate *bool                     `json:"group_auto_create"`
+		RoleMapping     map[string]models.OrgRole `json:"role_mapping"`
 	}
 	if err := h.decode(r, &body); err != nil {
 		h.err(w, http.StatusBadRequest, "invalid body")
@@ -126,6 +132,9 @@ func (h *Handler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		org.Slug = toSlug(body.Name)
 	}
 	org.Description = body.Description
+	if body.IsDefault != nil {
+		org.IsDefault = *body.IsDefault
+	}
 	if body.GroupClaims != nil {
 		org.GroupClaims = body.GroupClaims
 	}
@@ -134,6 +143,9 @@ func (h *Handler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.GroupAutoCreate != nil {
 		org.GroupAutoCreate = *body.GroupAutoCreate
+	}
+	if body.RoleMapping != nil {
+		org.RoleMapping = body.RoleMapping
 	}
 	if err := h.Store.UpdateOrg(r.Context(), org); err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")

@@ -100,6 +100,7 @@ type Organization struct {
 	Name        string    `json:"name"`
 	Slug        string    `json:"slug"` // url-safe identifier
 	Description string    `json:"description,omitempty"`
+	IsDefault   bool      `json:"is_default,omitempty"` // every OIDC user is added here automatically
 	CreatedBy   string    `json:"created_by"`
 	CreatedAt   time.Time `json:"created_at"`
 
@@ -107,6 +108,7 @@ type Organization struct {
 	GroupClaims     []string          `json:"group_claims,omitempty"`  // IdP groups that grant org membership
 	GroupMapping    map[string]string `json:"group_mapping,omitempty"` // idp_group → team name override
 	GroupAutoCreate bool              `json:"group_auto_create"`       // create teams that don't exist yet
+	RoleMapping     map[string]OrgRole `json:"role_mapping,omitempty"` // idp_role → OrgRole override
 }
 
 type OrgMember struct {

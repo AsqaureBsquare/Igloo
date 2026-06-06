@@ -79,6 +79,19 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
 
+      - name: Adopt pre-existing namespaces into Helm
+        run: |
+          for ns in default workspaces; do
+            kubectl get namespace "$ns" 2>/dev/null && \
+              kubectl annotate namespace "$ns" \
+                meta.helm.sh/release-name=igloo \
+                meta.helm.sh/release-namespace=default \
+                --overwrite && \
+              kubectl label namespace "$ns" \
+                app.kubernetes.io/managed-by=Helm \
+                --overwrite || true
+          done
+
       - name: Helm upgrade
         run: |
           helm upgrade --install igloo charts/igloo \

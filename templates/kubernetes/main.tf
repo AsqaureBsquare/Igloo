@@ -1,5 +1,9 @@
 terraform {
   required_providers {
+    igloo = {
+      source  = "AsqaureBsquare/igloo"
+      version = "~> 0.1"
+    }
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.31"
@@ -7,13 +11,11 @@ terraform {
   }
 }
 
-# Runs inside the EKS pod — automatically picks up in-cluster service account credentials.
+provider "igloo" {}
 provider "kubernetes" {}
 
-variable "workspace_id"    {}
-variable "workspace_name"  {}
-variable "server_url"      {}
-variable "agent_token"     {}
+resource "igloo_agent" "main" {}
+
 variable "workspace_image" {}
 variable "desired_count"   { default = "1" }
 variable "cpu"             { default = "500m" }
@@ -21,9 +23,9 @@ variable "memory"          { default = "512Mi" }
 variable "disk"            { default = "10Gi" }
 
 locals {
-  name      = "ws-${var.workspace_id}"
+  name      = "ws-${igloo_agent.main.workspace_id}"
   namespace = "workspaces"
-  labels    = { "igloo.dev/workspace-id" = var.workspace_id }
+  labels    = { "igloo.dev/workspace-id" = igloo_agent.main.workspace_id }
 }
 
 resource "kubernetes_persistent_volume_claim" "workspace" {
@@ -34,7 +36,7 @@ resource "kubernetes_persistent_volume_claim" "workspace" {
   }
   spec {
     access_modes       = ["ReadWriteOnce"]
-    storage_class_name = "gp2"
+    storage_class_name = "gp3"
     resources {
       requests = { storage = var.disk }
     }
@@ -67,15 +69,15 @@ resource "kubernetes_deployment" "workspace" {
           image = var.workspace_image
           env {
             name  = "IGLOO_SERVER_URL"
-            value = var.server_url
+            value = igloo_agent.main.server_url
           }
           env {
             name  = "IGLOO_AGENT_TOKEN"
-            value = var.agent_token
+            value = igloo_agent.main.token
           }
           env {
             name  = "IGLOO_WORKSPACE_ID"
-            value = var.workspace_id
+            value = igloo_agent.main.workspace_id
           }
           resources {
             requests = {

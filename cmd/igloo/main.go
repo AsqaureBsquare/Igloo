@@ -838,7 +838,28 @@ func runTemplatesPush(args []string) {
 
 	sess := mustLoadSession()
 
-	// If id is given, update that template; otherwise create a new one.
+	// Auto-detect existing template by name if no --id given.
+	if id == "" {
+		req, _ := http.NewRequest("GET", sess.ServerURL+"/api/templates", nil)
+		req.Header.Set("Authorization", "Bearer "+sess.Token)
+		if resp, err := (&http.Client{}).Do(req); err == nil {
+			defer resp.Body.Close()
+			var list []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}
+			if json.NewDecoder(resp.Body).Decode(&list) == nil {
+				for _, t := range list {
+					if t.Name == name {
+						id = t.ID
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// If id resolved, update that template; otherwise create a new one.
 	var method, url string
 	if id != "" {
 		method = "PUT"

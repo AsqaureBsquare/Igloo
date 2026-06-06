@@ -219,16 +219,6 @@ func (s *Server) SeedBuiltinTemplates(ctx context.Context) {
 			Files: loadTemplateFiles("kubernetes"),
 		},
 		{
-			ID:          "tpl-docker",
-			Name:        "Docker",
-			Description: "Run a workspace in a local Docker container. No cloud account needed.",
-			Provider:    "docker",
-			Icon:        "🐳",
-			Builtin:     true,
-			Variables:   []models.TemplateVar{},
-			Files:       loadTemplateFiles("docker"),
-		},
-		{
 			ID:          "tpl-docker-terraform",
 			Name:        "Docker (Terraform)",
 			Description: "Same as Docker but provisioned via Terraform. Use this to test the Terraform workflow locally.",

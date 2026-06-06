@@ -138,6 +138,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Get("/api/admin/users", h.AdminListUsers)
 			r.Put("/api/admin/users/{id}", h.AdminUpdateUser)
 			r.Delete("/api/admin/users/{id}", h.AdminDeleteUser)
+			r.Get("/api/admin/workspaces", h.AdminListWorkspaces)
 			r.Post("/api/admin/provisioner-keys", h.CreateProvisionerKey)
 			r.Get("/api/admin/provisioner-keys", h.ListProvisionerKeys)
 			r.Delete("/api/admin/provisioner-keys/{id}", h.DeleteProvisionerKey)

@@ -44,9 +44,10 @@ const api = (() => {
       update: (id, body) => req('PUT',  `/api/templates/${id}`, body),
     },
     admin: {
-      listUsers:  ()          => req('GET',    '/api/admin/users'),
-      updateUser: (id, body)  => req('PUT',    `/api/admin/users/${id}`, body),
-      deleteUser: (id)        => req('DELETE', `/api/admin/users/${id}`),
+      listUsers:       ()          => req('GET',    '/api/admin/users'),
+      updateUser:      (id, body)  => req('PUT',    `/api/admin/users/${id}`, body),
+      deleteUser:      (id)        => req('DELETE', `/api/admin/users/${id}`),
+      listWorkspaces:  (q)         => req('GET',    `/api/admin/workspaces${q ? '?q='+encodeURIComponent(q) : ''}`),
     },
     orgs: {
       list:          ()              => req('GET',    '/api/orgs'),
@@ -532,6 +533,9 @@ function renderShell() {
         <span class="nav-section-label">Admin</span>
         <button class="nav-item ${state.view==='users'?'active':''}" onclick="app.setView('users')">
           ${icon.users} Users
+        </button>
+        <button class="nav-item ${state.view==='admin-workspaces'?'active':''}" onclick="app.setView('admin-workspaces')">
+          ${icon.igloo} All Workspaces
         </button>` : ''}
         <span class="nav-section-label">Account</span>
         <button class="nav-item ${state.view==='settings'?'active':''}" onclick="app.setView('settings')">
@@ -562,48 +566,83 @@ function renderShell() {
 }
 
 // ─── Views ────────────────────────────────────────────────────────────────────
-function renderIgloosView() {
-  document.getElementById('view-title').textContent = 'My Igloos';
+function renderIgloosView(q) {
+  document.getElementById('view-title').textContent = state.user?.is_admin ? 'All Igloos' : 'My Igloos';
   document.getElementById('topbar-actions').innerHTML =
-    `<button class="btn btn-primary" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>`;
+    `<div class="search-bar-wrap">
+       <input class="search-bar" id="ws-search" placeholder="Search… owner:me status:running template:k8s" value="${esc(q||'')}"
+         oninput="app.searchWorkspaces(this.value)">
+     </div>
+     <button class="btn btn-primary" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>`;
 
   const el = document.getElementById('content');
-  if (!state.workspaces.length) {
-    el.innerHTML = `
-    <div class="empty-state">
-      <svg class="empty-igloo" viewBox="0 0 100 60" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M10 42 Q10 8 50 8 Q90 8 90 42" stroke="white" stroke-width="3" stroke-linecap="round"/>
-        <line x1="4" y1="42" x2="96" y2="42" stroke="white" stroke-width="3" stroke-linecap="round"/>
-        <path d="M37 42 Q37 30 50 30 Q63 30 63 42" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
-        <path d="M18 35 Q50 26 82 35" stroke="white" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.5"/>
-      </svg>
-      <h2>No igloos yet</h2>
-      <p>Build your first igloo from a template and connect instantly. It'll sleep to $0 when idle.</p>
-      <button class="btn btn-primary" style="margin-top:4px;width:auto" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>
-    </div>`;
+  const visible = q
+    ? state.workspaces.filter(w => wsMatchesQuery(w, q))
+    : state.workspaces;
+
+  if (!visible.length) {
+    el.innerHTML = state.workspaces.length
+      ? `<div class="empty-state"><h2>No matches</h2><p>Try a different search query.</p></div>`
+      : `<div class="empty-state">
+           <svg class="empty-igloo" viewBox="0 0 100 60" fill="none" xmlns="http://www.w3.org/2000/svg">
+             <path d="M10 42 Q10 8 50 8 Q90 8 90 42" stroke="white" stroke-width="3" stroke-linecap="round"/>
+             <line x1="4" y1="42" x2="96" y2="42" stroke="white" stroke-width="3" stroke-linecap="round"/>
+             <path d="M37 42 Q37 30 50 30 Q63 30 63 42" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+             <path d="M18 35 Q50 26 82 35" stroke="white" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.5"/>
+           </svg>
+           <h2>No igloos yet</h2>
+           <p>Build your first igloo from a template and connect instantly. It'll sleep to $0 when idle.</p>
+           <button class="btn btn-primary" style="margin-top:4px;width:auto" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>
+         </div>`;
     return;
   }
-  el.innerHTML = `<div class="igloo-grid">${state.workspaces.map(renderIglooCard).join('')}</div>`;
+  el.innerHTML = `<div class="igloo-grid">${visible.map(renderIglooCard).join('')}</div>`;
   provLog.sync(state.workspaces);
-  // Scroll all visible log panels to bottom (populated from buffered lines)
   state.workspaces.forEach(ws => {
     const panel = document.getElementById(`log-panel-${ws.id}`);
     if (panel) panel.scrollTop = panel.scrollHeight;
   });
 }
 
-function renderTemplatesView(selectedId) {
+// Client-side workspace filter matching the same key:value syntax as the API.
+function wsMatchesQuery(ws, q) {
+  if (!q) return true;
+  const terms = q.trim().split(/\s+/);
+  return terms.every(term => {
+    const [key, ...rest] = term.split(':');
+    const val = rest.join(':').toLowerCase();
+    if (!val) return ws.name.toLowerCase().includes(key.toLowerCase());
+    switch(key.toLowerCase()) {
+      case 'owner':   return val === 'me' ? ws.user_id === state.user?.id : ws.user_id.toLowerCase().includes(val);
+      case 'template': return (ws.template_name||'').toLowerCase().includes(val);
+      case 'name':    return ws.name.toLowerCase().includes(val);
+      case 'status':  return ws.status === val;
+      case 'org':     return (ws.org_id||'').toLowerCase().includes(val);
+      default:        return true;
+    }
+  });
+}
+
+function renderTemplatesView(selectedId, q) {
   const isAdmin = state.user?.is_admin;
   document.getElementById('view-title').textContent = 'Templates';
-  document.getElementById('topbar-actions').innerHTML = isAdmin
-    ? `<button class="btn btn-primary" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : '';
+  document.getElementById('topbar-actions').innerHTML =
+    `<div class="search-bar-wrap">
+       <input class="search-bar" id="tpl-search" placeholder="Search templates…" value="${esc(q||'')}"
+         oninput="app.searchTemplates(this.value)">
+     </div>
+     ${isAdmin ? `<button class="btn btn-primary" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}`;
 
-  const sel = selectedId || state.templates[0]?.id;
+  const visible = q
+    ? state.templates.filter(t => t.name.toLowerCase().includes(q.toLowerCase()) || (t.description||'').toLowerCase().includes(q.toLowerCase()))
+    : state.templates;
+
+  const sel = selectedId || visible[0]?.id;
   const el = document.getElementById('content');
   el.innerHTML = `
   <div class="templates-layout">
     <div class="templates-list">
-      ${state.templates.map(t => `
+      ${visible.map(t => `
       <div class="tpl-list-item${t.id === sel ? ' selected' : ''}" onclick="app.selectTemplateView('${t.id}')">
         <span class="template-icon" style="font-size:1.2em">${t.icon || '📦'}</span>
         <div style="flex:1;min-width:0">
@@ -734,6 +773,65 @@ async function renderUsersView() {
   } catch(e) {
     el.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
   }
+}
+
+// ─── Admin workspaces view ────────────────────────────────────────────────────
+
+async function renderAdminWorkspacesView(q) {
+  document.getElementById('view-title').textContent = 'All Workspaces';
+  document.getElementById('topbar-actions').innerHTML =
+    `<div class="search-bar-wrap">
+       <input class="search-bar" id="admin-ws-search" placeholder="owner:alice status:running template:kubernetes org:acme" value="${esc(q||'')}"
+         oninput="app.searchAdminWorkspaces(this.value)" style="width:320px">
+     </div>`;
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+  try {
+    const ws = await api.admin.listWorkspaces(q || '');
+    if (!ws.length) {
+      el.innerHTML = `<div class="empty-state"><h2>No workspaces${q ? ' match' : ''}</h2><p>${q ? 'Try a different query.' : 'No workspaces have been created yet.'}</p></div>`;
+      return;
+    }
+    el.innerHTML = `
+    <div style="max-width:1000px">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">${ws.length} workspace${ws.length!==1?'s':''} found</div>
+      <table class="users-table">
+        <thead><tr><th>Name</th><th>Owner</th><th>Template</th><th>Org</th><th>Status</th><th>Updated</th><th></th></tr></thead>
+        <tbody>
+          ${ws.map(w => `
+          <tr>
+            <td style="font-weight:600">${esc(w.name)}</td>
+            <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">${esc(w.user_id.slice(0,8))}…</td>
+            <td>${esc(w.template_name||'—')}</td>
+            <td style="font-size:11px;color:var(--muted)">${esc(w.org_id ? w.org_id.slice(0,8)+'…' : '—')}</td>
+            <td>${wsStatusBadge(w.status)}</td>
+            <td style="font-size:11px;color:var(--muted)">${timeAgo(w.updated_at)}</td>
+            <td style="text-align:right;white-space:nowrap;display:flex;gap:6px;justify-content:flex-end">
+              ${w.status === 'sleeping' || w.status === 'error'
+                ? `<button class="btn btn-ghost btn-sm" onclick="app.adminStartWs('${w.id}')">Start</button>` : ''}
+              ${w.status === 'running' || w.status === 'creating'
+                ? `<button class="btn btn-ghost btn-sm" onclick="app.adminStopWs('${w.id}')">Stop</button>` : ''}
+              <button class="btn btn-danger btn-sm" onclick="app.adminDeleteWs('${w.id}','${esc(w.name)}')">Delete</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
+  }
+}
+
+function wsStatusBadge(status) {
+  const colors = {
+    running:  'background:rgba(0,255,179,.1);color:#00ffb3;border:1px solid rgba(0,255,179,.2)',
+    creating: 'background:rgba(255,196,0,.1);color:#ffc400;border:1px solid rgba(255,196,0,.2)',
+    sleeping: 'background:rgba(74,127,165,.1);color:#4a7fa5;border:1px solid rgba(74,127,165,.2)',
+    deleting: 'background:rgba(255,61,107,.1);color:#ff3d6b;border:1px solid rgba(255,61,107,.2)',
+    error:    'background:rgba(255,61,107,.1);color:#ff3d6b;border:1px solid rgba(255,61,107,.2)',
+  };
+  const s = colors[status] || '';
+  return `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.05em;${s}">${status}</span>`;
 }
 
 // ─── Organizations views ──────────────────────────────────────────────────────
@@ -1095,12 +1193,44 @@ window.app = {
   setView(v) {
     state.view = v;
     renderShell();
-    if      (v === 'igloos')     renderIgloosView();
-    else if (v === 'templates')  renderTemplatesView();
-    else if (v === 'settings')   renderSettingsView();
-    else if (v === 'users')      renderUsersView();
-    else if (v === 'orgs')       renderOrgsView();
-    else if (v === 'org-detail') renderOrgDetailView();
+    if      (v === 'igloos')            renderIgloosView();
+    else if (v === 'templates')         renderTemplatesView();
+    else if (v === 'settings')          renderSettingsView();
+    else if (v === 'users')             renderUsersView();
+    else if (v === 'admin-workspaces')  renderAdminWorkspacesView();
+    else if (v === 'orgs')              renderOrgsView();
+    else if (v === 'org-detail')        renderOrgDetailView();
+  },
+
+  searchWorkspaces(q) {
+    clearTimeout(this._wsSearchTimer);
+    this._wsSearchTimer = setTimeout(() => renderIgloosView(q), 200);
+  },
+
+  searchTemplates(q) {
+    clearTimeout(this._tplSearchTimer);
+    this._tplSearchTimer = setTimeout(() => renderTemplatesView(undefined, q), 200);
+  },
+
+  searchAdminWorkspaces(q) {
+    clearTimeout(this._adminWsTimer);
+    this._adminWsTimer = setTimeout(() => renderAdminWorkspacesView(q), 300);
+  },
+
+  async adminStartWs(id) {
+    try { await api.workspaces.start(id); toast('Workspace starting', 'success'); renderAdminWorkspacesView(); }
+    catch(e) { toast(e.message, 'error'); }
+  },
+
+  async adminStopWs(id) {
+    try { await api.workspaces.stop(id); toast('Workspace stopped', 'success'); renderAdminWorkspacesView(); }
+    catch(e) { toast(e.message, 'error'); }
+  },
+
+  async adminDeleteWs(id, name) {
+    if (!confirm(`Delete workspace "${name}"? This cannot be undone.`)) return;
+    try { await api.workspaces.del(id); toast('Workspace deleted', 'success'); renderAdminWorkspacesView(); }
+    catch(e) { toast(e.message, 'error'); }
   },
 
   openOrg(id) {

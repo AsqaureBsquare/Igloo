@@ -29,12 +29,15 @@ func loadFilesFromDisk(name string) map[string]string {
 	return files
 }
 
-// GET /api/templates
+// GET /api/templates?q=kubernetes
 func (h *Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
 	templates, err := h.Store.ListTemplates(r.Context(), ctxOrgID(r))
 	if err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+	if q := r.URL.Query().Get("q"); q != "" {
+		templates = applyTemplateFilter(templates, ParseTemplateFilter(q))
 	}
 	if templates == nil {
 		templates = []*models.Template{}

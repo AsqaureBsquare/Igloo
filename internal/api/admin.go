@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -110,4 +111,48 @@ func (h *Handler) AdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.json(w, http.StatusOK, user)
+}
+
+// GET /api/admin/workspaces?q=owner:alice+status:running+template:kubernetes
+// Returns all workspaces across all users and orgs, with optional search filters.
+func (h *Handler) AdminListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	f := ParseWorkspaceFilter(r.URL.Query().Get("q"))
+
+	// Fetch all workspaces — empty userID and orgID = no owner/org restriction.
+	ws, err := h.Store.ListWorkspaces(r.Context(), "", "")
+	if err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	tplNames := h.templateNameIndex(r.Context())
+	ws = applyWorkspaceFilter(ws, f, tplNames)
+
+	if ws == nil {
+		ws = []*models.Workspace{}
+	}
+	h.json(w, http.StatusOK, ws)
+}
+
+// canAccessWorkspace returns true if the caller owns the workspace or is a site admin.
+func (h *Handler) canAccessWorkspace(r *http.Request, ws *models.Workspace) bool {
+	callerID := ctxUserID(r)
+	if ws.UserID == callerID {
+		return true
+	}
+	user, err := h.Store.GetUser(r.Context(), callerID)
+	return err == nil && user.IsAdmin
+}
+
+// templateNameIndex builds a map of template ID → template name for search filtering.
+func (h *Handler) templateNameIndex(ctx context.Context) map[string]string {
+	templates, err := h.Store.ListTemplates(ctx, "")
+	if err != nil {
+		return map[string]string{}
+	}
+	m := make(map[string]string, len(templates))
+	for _, t := range templates {
+		m[t.ID] = t.Name
+	}
+	return m
 }

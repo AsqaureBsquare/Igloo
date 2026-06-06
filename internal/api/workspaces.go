@@ -25,13 +25,35 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// GET /api/workspaces
+// GET /api/workspaces?q=owner:me+template:kubernetes+status:running
 func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
-	ws, err := h.Store.ListWorkspaces(r.Context(), ctxUserID(r), ctxOrgID(r))
+	f := ParseWorkspaceFilter(r.URL.Query().Get("q"))
+	callerID := ctxUserID(r)
+
+	// Admins see all workspaces by default; regular users always see only their own.
+	user, _ := h.Store.GetUser(r.Context(), callerID)
+	isAdmin := user != nil && user.IsAdmin
+
+	ownerID := callerID
+	if isAdmin {
+		// Admin: no owner filter unless they explicitly request owner:me
+		if f.Owner == "me" {
+			ownerID = callerID
+		} else {
+			ownerID = "" // all users
+		}
+	}
+
+	ws, err := h.Store.ListWorkspaces(r.Context(), ownerID, ctxOrgID(r))
 	if err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+
+	// Build template name index for filtering.
+	tplNames := h.templateNameIndex(r.Context())
+	ws = applyWorkspaceFilter(ws, f, tplNames)
+
 	if ws == nil {
 		ws = []*models.Workspace{}
 	}
@@ -105,7 +127,7 @@ func (h *Handler) GetWorkspace(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	if ws.UserID != ctxUserID(r) {
+	if !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -115,7 +137,7 @@ func (h *Handler) GetWorkspace(w http.ResponseWriter, r *http.Request) {
 // POST /api/workspaces/{id}/start
 func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
-	if err != nil || ws.UserID != ctxUserID(r) {
+	if err != nil || !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
@@ -185,7 +207,7 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 // POST /api/workspaces/{id}/stop
 func (h *Handler) StopWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
-	if err != nil || ws.UserID != ctxUserID(r) {
+	if err != nil || !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
@@ -214,7 +236,7 @@ func (h *Handler) StopWorkspace(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/workspaces/{id}
 func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
-	if err != nil || ws.UserID != ctxUserID(r) {
+	if err != nil || !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
@@ -294,7 +316,7 @@ func (h *Handler) ProvisionLogs(w http.ResponseWriter, r *http.Request) {
 // GET /api/workspaces/{id}/terminal
 func (h *Handler) TerminalToken(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
-	if err != nil || ws.UserID != ctxUserID(r) {
+	if err != nil || !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
@@ -316,7 +338,7 @@ func (h *Handler) TerminalToken(w http.ResponseWriter, r *http.Request) {
 // GET /api/workspaces/{id}/agent-logs
 func (h *Handler) AgentLogs(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
-	if err != nil || ws.UserID != ctxUserID(r) {
+	if err != nil || !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
@@ -567,7 +589,7 @@ func (h *Handler) tfCmd(dir string, args ...string) *exec.Cmd {
 // GET /api/workspaces/{id}/logs
 func (h *Handler) WorkspaceLogs(w http.ResponseWriter, r *http.Request) {
 	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
-	if err != nil || ws.UserID != ctxUserID(r) {
+	if err != nil || !h.canAccessWorkspace(r, ws) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}

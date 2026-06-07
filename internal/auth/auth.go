@@ -47,6 +47,19 @@ func (a *Auth) SignUser(userID, email string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(a.secret)
 }
 
+// SignCLI issues a long-lived (30-day) session token for CLI use.
+func (a *Auth) SignCLI(userID, email string) (string, error) {
+	claims := UserClaims{
+		UserID: userID,
+		Email:  email,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(30 * 24 * time.Hour)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(a.secret)
+}
+
 func (a *Auth) ParseUser(token string) (*UserClaims, error) {
 	t, err := jwt.ParseWithClaims(token, &UserClaims{}, func(t *jwt.Token) (any, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {

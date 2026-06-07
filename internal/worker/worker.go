@@ -143,11 +143,7 @@ func (w *Worker) processNext(ctx context.Context) {
 	var runErr error
 	switch job.Action {
 	case models.JobStart:
-		sshKey := ""
-		if user, e := w.Store.GetUser(ctx, ws.UserID); e == nil {
-			sshKey = user.SSHPublicKey
-		}
-		runErr = w.launchFargate(ctx, ws, tmpl, w.ServerURL, sshKey)
+		runErr = w.launchFargate(ctx, ws, tmpl, w.ServerURL)
 		if runErr != nil {
 			if cur, e := w.Store.GetWorkspace(ctx, ws.ID); e == nil {
 				cur.Status = models.StatusError
@@ -197,7 +193,7 @@ func (w *Worker) finishJob(ctx context.Context, job *models.ProvisionJob, err er
 
 // ─── Fargate provisioning ─────────────────────────────────────────────────────
 
-func (w *Worker) launchFargate(ctx context.Context, ws *models.Workspace, tmpl *models.Template, serverURL, sshKey string) error {
+func (w *Worker) launchFargate(ctx context.Context, ws *models.Workspace, tmpl *models.Template, serverURL string) error {
 	if tmpl == nil {
 		return fmt.Errorf("template not found")
 	}
@@ -224,7 +220,7 @@ func (w *Worker) launchFargate(ctx context.Context, ws *models.Workspace, tmpl *
 		_ = w.Store.UpdateWorkspace(ctx, cur)
 	}
 
-	vars := buildFargateVars(ws, serverURL, sshKey)
+	vars := buildFargateVars(ws, serverURL)
 	vars["desired_count"] = "1"
 
 	outputs, err := provisioner.Run(ctx, provisioner.Input{
@@ -266,7 +262,7 @@ func (w *Worker) sleepFargate(ctx context.Context, ws *models.Workspace, tmpl *m
 		region = "us-east-1"
 	}
 
-	vars := buildFargateVars(ws, "", "")
+	vars := buildFargateVars(ws, "")
 	vars["desired_count"] = "0"
 
 	_, err := provisioner.Run(ctx, provisioner.Input{
@@ -295,18 +291,13 @@ func (w *Worker) destroyFargate(ctx context.Context, ws *models.Workspace, tmpl 
 		return fmt.Errorf("no terraform files for aws-fargate template")
 	}
 
-	sshKey := ""
-	if user, err := w.Store.GetUser(ctx, ws.UserID); err == nil {
-		sshKey = user.SSHPublicKey
-	}
-
 	bucket := os.Getenv("IGLOO_TF_STATE_BUCKET")
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
 		region = "us-east-1"
 	}
 
-	vars := buildFargateVars(ws, "", sshKey)
+	vars := buildFargateVars(ws, "")
 	vars["desired_count"] = "0"
 
 	_, err := provisioner.Run(ctx, provisioner.Input{
@@ -323,7 +314,7 @@ func (w *Worker) destroyFargate(ctx context.Context, ws *models.Workspace, tmpl 
 	return nil
 }
 
-func buildFargateVars(ws *models.Workspace, serverURL, sshKey string) map[string]string {
+func buildFargateVars(ws *models.Workspace, serverURL string) map[string]string {
 	vars := make(map[string]string)
 	for k, v := range ws.Vars {
 		vars[k] = v
@@ -332,7 +323,6 @@ func buildFargateVars(ws *models.Workspace, serverURL, sshKey string) map[string
 	vars["workspace_name"] = ws.Name
 	vars["server_url"] = serverURL
 	vars["agent_token"] = ws.AgentToken
-	vars["ssh_public_key"] = sshKey
 	vars["cluster_name"] = os.Getenv("IGLOO_ECS_CLUSTER")
 	vars["task_execution_role_arn"] = os.Getenv("IGLOO_ECS_EXECUTION_ROLE_ARN")
 	vars["task_role_arn"] = os.Getenv("IGLOO_ECS_TASK_ROLE_ARN")

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +51,10 @@ func main() {
 		runProvisionerKeys(os.Args[2:])
 	case "templates", "tpl":
 		runTemplates(os.Args[2:])
+	case "token", "tokens":
+		runToken(os.Args[2:])
+	case "users":
+		runUsers(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("igloo %s\n", version)
 	default:
@@ -63,26 +68,32 @@ func printUsage() {
 
 Usage:
   igloo server [--port 8080] [--local]     Start the control plane
-  igloo login <server-url> <email>          Authenticate and save credentials
+  igloo login <server-url>                  Authenticate via browser and save session
   igloo ssh <workspace-name> [ssh-flags]   SSH into a workspace
   igloo config-ssh                          Write SSH config for direct ssh use
   igloo proxy <workspace-name|id>           SSH ProxyCommand (used by config-ssh)
   igloo provisioner-keys <subcommand>       Manage provisioner keys (admin)
   igloo templates <subcommand>              Manage workspace templates
+  igloo token <subcommand>                  Manage API tokens
+  igloo users <subcommand>                  Manage users (admin)
   igloo version                             Print version
 
-SSH (two options):
-  # Option 1 — igloo ssh (recommended, works with or without Tailscale)
-  igloo login https://igloo.example.com you@example.com
-  igloo ssh my-workspace
+API token subcommands:
+  igloo token create --name <n> [--lifetime 8760h] [--user <email>]
+  igloo token list
+  igloo token revoke <id>
 
-  # Option 2 — native ssh via ProxyCommand
-  igloo config-ssh
-  ssh igloo-my-workspace
+User subcommands:
+  igloo users create --email <e> --name <n> [--login-type none]
 
-  # Option 3 — Tailscale direct (fastest, no relay)
-  # Requires Tailscale installed on your machine and TAILSCALE_API_KEY on server
-  tailscale ssh igloo-my-workspace
+Environment variables (for CI / service accounts):
+  IGLOO_TOKEN       API token (bypasses session file)
+  IGLOO_SERVER_URL  Server URL (required when IGLOO_TOKEN is set)
+
+SSH:
+  igloo login https://igloo.example.com
+  igloo ssh my-workspace         # WireGuard tailnet (recommended)
+  igloo config-ssh               # write ~/.ssh/config for native ssh
 
 Provisioner key subcommands:
   igloo pkeys new <name>   Create a key (alias: create)
@@ -122,41 +133,87 @@ func saveSession(s *session) error {
 // ─── login subcommand ─────────────────────────────────────────────────────────
 
 func runLogin(args []string) {
-	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: igloo login <server-url> <email>")
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo login <server-url>")
 		os.Exit(1)
 	}
 	serverURL := strings.TrimRight(args[0], "/")
-	email := args[1]
+	code := generateDeviceCode()
 
-	// Disable terminal echo for password input
-	exec.Command("stty", "-echo").Run()
-	fmt.Fprint(os.Stderr, "Password: ")
-	var password string
-	fmt.Fscanln(os.Stdin, &password)
-	exec.Command("stty", "echo").Run()
-	fmt.Fprintln(os.Stderr)
-
-	body, _ := json.Marshal(map[string]string{"email": email, "password": password})
-	resp, err := http.Post(serverURL+"/api/auth/login", "application/json", bytes.NewReader(body))
-	if err != nil {
-		log.Fatalf("login failed: %v", err)
+	// Register the code with the server
+	body, _ := json.Marshal(map[string]string{"code": code})
+	resp, err := http.Post(serverURL+"/api/auth/device/init", "application/json", bytes.NewReader(body))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		log.Fatalf("failed to reach server: %v", err)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
 
-	var result map[string]string
-	json.Unmarshal(raw, &result)
-	token := result["token"]
-	if token == "" {
-		fmt.Fprintf(os.Stderr, "Login failed: %s\n", raw)
-		os.Exit(1)
-	}
+	authURL := serverURL + "/cli-auth?code=" + code
+	fmt.Fprintf(os.Stderr, "\n  Your one-time code:  %s\n\n", code)
+	fmt.Fprintf(os.Stderr, "  Opening: %s\n\n", authURL)
+	openBrowser(authURL)
+	fmt.Fprintln(os.Stderr, "  Waiting for browser approval...")
+
+	// Poll until approved or expired
+	token := pollDeviceCode(serverURL, code)
 
 	if err := saveSession(&session{ServerURL: serverURL, Token: token}); err != nil {
 		log.Fatalf("failed to save session: %v", err)
 	}
-	fmt.Fprintf(os.Stderr, "Logged in. Credentials saved to %s\n", sessionPath())
+	fmt.Fprintln(os.Stderr, "\n  ✓ Logged in successfully")
+	fmt.Fprintln(os.Stderr, "  Run `igloo config-ssh` to enable `ssh igloo-<workspace>`")
+}
+
+func pollDeviceCode(serverURL, code string) string {
+	client := &http.Client{Timeout: 5 * time.Second}
+	deadline := time.Now().Add(5 * time.Minute)
+	for time.Now().Before(deadline) {
+		time.Sleep(2 * time.Second)
+		resp, err := client.Get(serverURL + "/api/auth/device/poll?code=" + code)
+		if err != nil {
+			continue
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusGone {
+			fmt.Fprintln(os.Stderr, "Code expired. Run igloo login again.")
+			os.Exit(1)
+		}
+		if resp.StatusCode == http.StatusOK {
+			var result map[string]string
+			json.NewDecoder(resp.Body).Decode(&result)
+			return result["token"]
+		}
+		// 202 = still pending, keep polling
+	}
+	fmt.Fprintln(os.Stderr, "Timed out waiting for approval.")
+	os.Exit(1)
+	return ""
+}
+
+// generateDeviceCode returns a code like BCDF-GHKM (no ambiguous chars).
+func generateDeviceCode() string {
+	const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	b := make([]byte, 8)
+	rand.Read(b)
+	for i := range b {
+		b[i] = chars[int(b[i])%len(chars)]
+	}
+	return string(b[:4]) + "-" + string(b[4:])
+}
+
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "  Could not open browser. Open manually:\n  %s\n\n", url)
+	}
 }
 
 // ─── ssh subcommand ───────────────────────────────────────────────────────────
@@ -333,6 +390,7 @@ const sshConfigBlock = `# BEGIN igloo
 Host igloo-*
   ProxyCommand igloo proxy %h
   User root
+  Port 2222
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
   LogLevel ERROR
@@ -377,7 +435,7 @@ func removeSSHBlock(cfg string) string {
 // ─── proxy subcommand (SSH ProxyCommand) ─────────────────────────────────────
 
 func runProxy(args []string) {
-	port := "22"
+	port := "2222"
 	var workspaceID string
 
 	for i := 0; i < len(args); i++ {
@@ -731,9 +789,18 @@ func runPKRevoke(args []string) {
 }
 
 func mustLoadSession() *session {
+	// IGLOO_TOKEN + IGLOO_SERVER_URL env vars bypass the session file (CI / service accounts).
+	if tok := os.Getenv("IGLOO_TOKEN"); tok != "" {
+		url := os.Getenv("IGLOO_SERVER_URL")
+		if url == "" {
+			fmt.Fprintln(os.Stderr, "IGLOO_SERVER_URL must be set when using IGLOO_TOKEN")
+			os.Exit(1)
+		}
+		return &session{ServerURL: strings.TrimRight(url, "/"), Token: tok}
+	}
 	sess, err := loadSession()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Not logged in. Run: igloo login <server-url> <email>")
+		fmt.Fprintln(os.Stderr, "Not logged in. Run: igloo login <server-url>")
 		os.Exit(1)
 	}
 	return sess
@@ -957,4 +1024,230 @@ func runTemplatesDelete(args []string) {
 		fmt.Fprintf(os.Stderr, "Failed to delete template (HTTP %d)\n", resp.StatusCode)
 		os.Exit(1)
 	}
+}
+
+// ─── token subcommand ─────────────────────────────────────────────────────────
+
+func runToken(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo token <create|list|revoke>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "create", "new":
+		runTokenCreate(args[1:])
+	case "list", "ls":
+		runTokenList()
+	case "revoke", "rm", "delete":
+		runTokenRevoke(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func runTokenCreate(args []string) {
+	var name, lifetime, userEmail string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--name":
+			if i+1 < len(args) {
+				name = args[i+1]
+				i++
+			}
+		case "--lifetime":
+			if i+1 < len(args) {
+				lifetime = args[i+1]
+				i++
+			}
+		case "--user":
+			if i+1 < len(args) {
+				userEmail = args[i+1]
+				i++
+			}
+		}
+	}
+	if name == "" {
+		fmt.Fprintln(os.Stderr, "Usage: igloo token create --name <name> [--lifetime 8760h] [--user <email>]")
+		os.Exit(1)
+	}
+
+	sess := mustLoadSession()
+
+	// If --user supplied, look up user ID first.
+	userID := ""
+	if userEmail != "" {
+		// GET /api/admin/users to find the user by email
+		req, _ := http.NewRequest("GET", sess.ServerURL+"/api/admin/users", nil)
+		req.Header.Set("Authorization", "Bearer "+sess.Token)
+		resp, err := (&http.Client{}).Do(req)
+		if err != nil {
+			log.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		var users []map[string]any
+		json.NewDecoder(resp.Body).Decode(&users)
+		for _, u := range users {
+			if e, _ := u["email"].(string); strings.EqualFold(e, userEmail) {
+				userID, _ = u["id"].(string)
+				break
+			}
+		}
+		if userID == "" {
+			log.Fatalf("user %q not found", userEmail)
+		}
+	}
+
+	body := map[string]any{"name": name}
+	if lifetime != "" {
+		body["lifetime"] = lifetime
+	}
+	if userID != "" {
+		body["user_id"] = userID
+	}
+
+	data, _ := json.Marshal(body)
+	req, _ := http.NewRequest("POST", sess.ServerURL+"/api/tokens", bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != http.StatusCreated {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", result["error"])
+		os.Exit(1)
+	}
+
+	fmt.Printf("Token created\n")
+	fmt.Printf("  ID:      %s\n", result["id"])
+	fmt.Printf("  Name:    %s\n", result["name"])
+	fmt.Printf("  Token:   %s\n", result["token"])
+	fmt.Printf("\nSave the token — it will not be shown again.\n")
+	fmt.Printf("Use it with: IGLOO_TOKEN=%s IGLOO_SERVER_URL=%s igloo ...\n", result["token"], sess.ServerURL)
+}
+
+func runTokenList() {
+	sess := mustLoadSession()
+	req, _ := http.NewRequest("GET", sess.ServerURL+"/api/tokens", nil)
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var tokens []map[string]any
+	json.NewDecoder(resp.Body).Decode(&tokens)
+
+	if len(tokens) == 0 {
+		fmt.Println("No API tokens.")
+		return
+	}
+
+	fmt.Printf("%-36s  %-20s  %-12s  %s\n", "ID", "NAME", "PREFIX", "EXPIRES")
+	fmt.Println(strings.Repeat("-", 90))
+	for _, t := range tokens {
+		fmt.Printf("%-36s  %-20s  %-12s  %s\n",
+			t["id"], t["name"], t["token_prefix"], t["expires_at"])
+	}
+}
+
+func runTokenRevoke(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo token revoke <id>")
+		os.Exit(1)
+	}
+	id := args[0]
+	sess := mustLoadSession()
+	req, _ := http.NewRequest("DELETE", sess.ServerURL+"/api/tokens/"+id, nil)
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNoContent {
+		fmt.Printf("Token %s revoked.\n", id)
+	} else {
+		fmt.Fprintf(os.Stderr, "Failed to revoke token (HTTP %d)\n", resp.StatusCode)
+		os.Exit(1)
+	}
+}
+
+// ─── users subcommand ─────────────────────────────────────────────────────────
+
+func runUsers(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: igloo users <create>")
+		os.Exit(1)
+	}
+	switch args[0] {
+	case "create", "new":
+		runUsersCreate(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown subcommand: %s\n", args[0])
+		os.Exit(1)
+	}
+}
+
+func runUsersCreate(args []string) {
+	var email, name, loginType string
+	loginType = "none"
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--email":
+			if i+1 < len(args) {
+				email = args[i+1]
+				i++
+			}
+		case "--name":
+			if i+1 < len(args) {
+				name = args[i+1]
+				i++
+			}
+		case "--login-type":
+			if i+1 < len(args) {
+				loginType = args[i+1]
+				i++
+			}
+		}
+	}
+	if email == "" || name == "" {
+		fmt.Fprintln(os.Stderr, "Usage: igloo users create --email <email> --name <name> [--login-type none]")
+		os.Exit(1)
+	}
+
+	sess := mustLoadSession()
+	data, _ := json.Marshal(map[string]string{"email": email, "name": name, "login_type": loginType})
+	req, _ := http.NewRequest("POST", sess.ServerURL+"/api/admin/users", bytes.NewReader(data))
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		log.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result map[string]any
+	json.NewDecoder(resp.Body).Decode(&result)
+
+	if resp.StatusCode != http.StatusCreated {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", result["error"])
+		os.Exit(1)
+	}
+
+	fmt.Printf("User created\n")
+	fmt.Printf("  ID:         %s\n", result["id"])
+	fmt.Printf("  Email:      %s\n", result["email"])
+	fmt.Printf("  Name:       %s\n", result["name"])
+	fmt.Printf("  Login type: %s\n", result["login_type"])
+	fmt.Printf("\nCreate a token for this account:\n")
+	fmt.Printf("  igloo token create --name ci --user %s\n", email)
 }

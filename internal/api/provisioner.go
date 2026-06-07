@@ -200,7 +200,6 @@ type claimResponse struct {
 	Vars          map[string]string `json:"vars"`
 	Meta          map[string]string `json:"meta"`
 	Files         map[string]string `json:"files"`
-	SSHKey        string            `json:"ssh_key"`
 	ServerURL     string            `json:"server_url"`
 	StateBucket   string            `json:"state_bucket"`
 	StateRegion   string            `json:"state_region"`
@@ -242,11 +241,6 @@ func (h *Handler) ClaimJob(w http.ResponseWriter, r *http.Request) {
 		files = tmpl.Files
 	}
 
-	sshKey := ""
-	if user, err := h.Store.GetUser(r.Context(), ws.UserID); err == nil {
-		sshKey = user.SSHPublicKey
-	}
-
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
 		region = "us-east-1"
@@ -262,7 +256,6 @@ func (h *Handler) ClaimJob(w http.ResponseWriter, r *http.Request) {
 		Vars:          ws.Vars,
 		Meta:          ws.Meta,
 		Files:         files,
-		SSHKey:        sshKey,
 		ServerURL:     os.Getenv("IGLOO_SERVER_URL"),
 		StateBucket:   os.Getenv("IGLOO_TF_STATE_BUCKET"),
 		StateRegion:   region,

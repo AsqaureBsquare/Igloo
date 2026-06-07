@@ -20,7 +20,6 @@ const api = (() => {
       register: (name, email, password) => req('POST', '/api/auth/register', { name, email, password }),
       login:    (email, password)        => req('POST', '/api/auth/login',    { email, password }),
       me:       ()                       => req('GET',  '/api/auth/me'),
-      saveSSHKey:       (key)  => req('PUT', '/api/auth/me/ssh-key',       { ssh_public_key: key }),
       saveTailscaleKey: (key)  => req('PUT', '/api/auth/me/tailscale-key', { tailscale_auth_key: key }),
     },
     platformConfig: {
@@ -455,32 +454,53 @@ function renderIglooCard(ws) {
 
   const isTerraform = ['docker-terraform','aws-fargate','fly','gcp-cloudrun'].includes(ws.provider);
 
+  const providerLabel = {
+    'kubernetes': 'k8s', 'docker': 'docker', 'docker-terraform': 'docker',
+    'aws-fargate': 'fargate', 'fly': 'fly.io', 'gcp-cloudrun': 'cloud run',
+  }[ws.provider] || ws.provider || 'cloud';
+
+  const costText = ws.status === 'running' && ws.cost_per_hr > 0
+    ? `$${ws.cost_per_hr.toFixed(4)}/hr`
+    : ws.status === 'sleeping' ? '$0.00 frozen' : '';
+  const costClass = ws.status === 'running' ? 'tag-cost-running' : 'tag-cost-sleeping';
+
   return `
-  <div class="igloo-card${showLogs ? ' igloo-card--active' : ''}" data-id="${ws.id}">
+  <div class="igloo-card igloo-card--${ws.status}" data-id="${ws.id}">
+    ${ws.status === 'running'  ? '<div class="card-scanline"></div>' : ''}
+    ${ws.status === 'creating' || ws.status === 'deleting' ? '<div class="card-progress-bar"></div>' : ''}
+
     <div class="igloo-card-header">
-      <div>
-        <div class="igloo-name">${esc(ws.name)}</div>
-        <div class="igloo-provider">${esc(ws.template_name)}</div>
+      <div class="igloo-card-header-left">
+        <span class="status-dot status-dot--${ws.status}"></span>
+        <div style="min-width:0">
+          <div class="igloo-name">${esc(ws.name)}</div>
+          <div class="igloo-meta-row">${timeAgo(ws.last_active_at)}</div>
+        </div>
       </div>
-      ${statusBadge(ws.status)}
+      <span class="template-badge">${esc(ws.template_name || 'custom')}</span>
     </div>
 
     ${isBuilding ? buildingAnimation() : ''}
     ${isFailed   ? errorAnimation()   : ''}
+    ${showLogs   ? renderLogPanel(ws.id) : ''}
 
-    ${showLogs ? renderLogPanel(ws.id) : ''}
-
-    <div class="igloo-meta">
-      <span class="text-muted text-sm">${timeAgo(ws.last_active_at)}</span>
-      ${costLabel(ws)}
+    <div class="igloo-tags">
+      <span class="tag-chip tag-provider">${esc(providerLabel)}</span>
+      ${costText ? `<span class="tag-chip ${costClass}">${esc(costText)}</span>` : ''}
     </div>
+
+    <div class="igloo-divider"></div>
+
     <div class="igloo-actions">
-      ${canConnect ? `<button class="btn btn-primary" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
+      ${canConnect ? `<button class="btn btn-ghost btn-sm" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
       ${canConnect ? `<button class="btn btn-ghost btn-sm" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
-      ${canStart   ? `<button class="btn btn-ghost" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
-      ${canStop    ? `<button class="btn btn-ghost" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
-      ${showLogs   ? '' : `<button class="btn btn-ghost" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>`}
-      ${isDeleting ? '' : `<button class="btn btn-icon btn-danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">🗑</button>`}
+      ${canStart   ? `<button class="btn btn-wake btn-sm" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
+      ${canStop    ? `<button class="btn btn-ghost btn-sm" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
+      ${!showLogs  ? `<button class="btn btn-ghost btn-sm" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>` : ''}
+      <span class="actions-spacer"></span>
+      ${!isDeleting ? `<button class="btn btn-icon btn-danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+      </button>` : ''}
     </div>
   </div>`;
 }
@@ -505,7 +525,7 @@ function renderShell() {
     <aside class="sidebar">
       <div class="sidebar-logo">
         <div class="sidebar-logo-icon">${icon.logo}</div>
-        igloo
+        <span class="sidebar-logo-text">igloo</span>
       </div>
       <nav class="sidebar-nav">
         <span class="nav-section-label">Workspace</span>
@@ -557,7 +577,9 @@ function renderShell() {
     </aside>
     <div class="main">
       <div class="topbar">
-        <h1 id="view-title">My Igloos</h1>
+        <div style="display:flex;align-items:center;gap:0;flex-shrink:0">
+          <h1 id="view-title" style="font-family:var(--font);font-size:17px;font-weight:700;letter-spacing:-0.3px;color:var(--text)">My Igloos</h1>
+        </div>
         <div id="topbar-actions"></div>
       </div>
       <div class="content" id="content"></div>
@@ -567,13 +589,26 @@ function renderShell() {
 
 // ─── Views ────────────────────────────────────────────────────────────────────
 function renderIgloosView(q) {
-  document.getElementById('view-title').textContent = state.user?.is_admin ? 'All Igloos' : 'My Igloos';
+  const runningCount = state.workspaces.filter(w => w.status === 'running').length;
+  const titleEl = document.getElementById('view-title');
+  titleEl.textContent = state.user?.is_admin ? 'All Igloos' : 'My Igloos';
+  // Append running badge after the title
+  const existingBadge = document.getElementById('running-count-badge');
+  if (existingBadge) existingBadge.remove();
+  if (runningCount > 0) {
+    const badge = document.createElement('span');
+    badge.id = 'running-count-badge';
+    badge.className = 'running-badge';
+    badge.innerHTML = `<span class="running-badge-dot"></span>${runningCount} live`;
+    badge.style.marginLeft = '12px';
+    titleEl.parentNode.insertBefore(badge, titleEl.nextSibling);
+  }
   document.getElementById('topbar-actions').innerHTML =
     `<div class="search-bar-wrap">
        <input class="search-bar" id="ws-search" placeholder="Search… owner:me status:running template:k8s" value="${esc(q||'')}"
          oninput="app.searchWorkspaces(this.value)">
      </div>
-     <button class="btn btn-primary" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>`;
+     <button class="btn btn-primary" style="width:auto;padding:8px 16px" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>`;
 
   const el = document.getElementById('content');
   const visible = q
@@ -673,19 +708,6 @@ function renderSettingsView() {
       <div class="field" style="margin:0"><label>Email</label>
         <input type="text" value="${esc(state.user?.email)}" readonly style="opacity:0.6" />
       </div>
-    </div>
-    <div class="settings-card">
-      <div class="settings-card-title">SSH Public Key</div>
-      <p style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.6">
-        Automatically injected into every igloo you build. Add it once — no manual setup needed.
-      </p>
-      <div class="field">
-        <label>Public key (paste your ~/.ssh/id_ed25519.pub)</label>
-        <textarea id="ssh-key-input" rows="3" placeholder="ssh-ed25519 AAAA…"
-          style="width:100%;font-family:var(--mono);font-size:12px;resize:vertical;background:rgba(2,12,24,0.8);color:var(--text);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;outline:none"
-        >${esc(state.user?.ssh_public_key || '')}</textarea>
-      </div>
-      <button class="btn btn-primary" style="width:auto" onclick="app.saveSSHKey()">Save key</button>
     </div>
     <div>
       <button class="btn btn-ghost" onclick="app.logout()">Sign out</button>

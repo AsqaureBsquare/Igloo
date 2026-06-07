@@ -42,9 +42,9 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 
 func (s *PostgresStore) CreateUser(ctx context.Context, u *models.User) error {
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO users (id, email, name, password_hash, ssh_public_key, tailscale_auth_key, is_admin, created_at)
+		INSERT INTO users (id, email, name, password_hash, tailscale_auth_key, is_admin, login_type, created_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		u.ID, u.Email, u.Name, u.PasswordHash, u.SSHPublicKey, u.TailscaleAuthKey, u.IsAdmin, u.CreatedAt)
+		u.ID, u.Email, u.Name, u.PasswordHash, u.TailscaleAuthKey, u.IsAdmin, u.LoginType, u.CreatedAt)
 	if err != nil && isUniqueViolation(err) {
 		return ErrConflict
 	}
@@ -52,25 +52,25 @@ func (s *PostgresStore) CreateUser(ctx context.Context, u *models.User) error {
 }
 
 func (s *PostgresStore) GetUser(ctx context.Context, id string) (*models.User, error) {
-	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,ssh_public_key,tailscale_auth_key,is_admin,created_at FROM users WHERE id=$1`, id)
+	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at FROM users WHERE id=$1`, id)
 	return scanUser(row)
 }
 
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,ssh_public_key,tailscale_auth_key,is_admin,created_at FROM users WHERE email=$1`, email)
+	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at FROM users WHERE email=$1`, email)
 	return scanUser(row)
 }
 
 func (s *PostgresStore) UpdateUser(ctx context.Context, u *models.User) error {
 	_, err := s.db.Exec(ctx, `
-		UPDATE users SET email=$2, name=$3, password_hash=$4, ssh_public_key=$5,
-		tailscale_auth_key=$6, is_admin=$7 WHERE id=$1`,
-		u.ID, u.Email, u.Name, u.PasswordHash, u.SSHPublicKey, u.TailscaleAuthKey, u.IsAdmin)
+		UPDATE users SET email=$2, name=$3, password_hash=$4,
+		tailscale_auth_key=$5, is_admin=$6, login_type=$7 WHERE id=$1`,
+		u.ID, u.Email, u.Name, u.PasswordHash, u.TailscaleAuthKey, u.IsAdmin, u.LoginType)
 	return err
 }
 
 func (s *PostgresStore) ListUsers(ctx context.Context) ([]*models.User, error) {
-	rows, err := s.db.Query(ctx, `SELECT id,email,name,password_hash,ssh_public_key,tailscale_auth_key,is_admin,created_at FROM users WHERE id != '__platform__' ORDER BY created_at`)
+	rows, err := s.db.Query(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at FROM users WHERE id != '__platform__' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -310,6 +310,50 @@ func (s *PostgresStore) DeleteProvisionerKey(ctx context.Context, id string) err
 
 func (s *PostgresStore) TouchProvisionerKey(ctx context.Context, id string) error {
 	_, err := s.db.Exec(ctx, `UPDATE provisioner_keys SET last_used_at=$2 WHERE id=$1`, id, time.Now())
+	return err
+}
+
+// ─── API Tokens ───────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateAPIToken(ctx context.Context, t *models.APIToken) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO api_tokens (id,user_id,token_hash,token_prefix,name,expires_at,created_at,created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+		t.ID, t.UserID, t.TokenHash, t.TokenPrefix, t.Name, t.ExpiresAt, t.CreatedAt, t.CreatedBy)
+	if err != nil && isUniqueViolation(err) {
+		return ErrConflict
+	}
+	return err
+}
+
+func (s *PostgresStore) GetAPITokenByHash(ctx context.Context, hash string) (*models.APIToken, error) {
+	row := s.db.QueryRow(ctx, `SELECT id,user_id,token_hash,token_prefix,name,expires_at,last_used_at,created_at,created_by FROM api_tokens WHERE token_hash=$1`, hash)
+	return scanAPIToken(row)
+}
+
+func (s *PostgresStore) ListAPITokens(ctx context.Context, userID string) ([]*models.APIToken, error) {
+	rows, err := s.db.Query(ctx, `SELECT id,user_id,token_hash,token_prefix,name,expires_at,last_used_at,created_at,created_by FROM api_tokens WHERE user_id=$1 ORDER BY created_at DESC`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*models.APIToken
+	for rows.Next() {
+		t, err := scanAPIToken(rows)
+		if err == nil {
+			out = append(out, t)
+		}
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) DeleteAPIToken(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM api_tokens WHERE id=$1`, id)
+	return err
+}
+
+func (s *PostgresStore) TouchAPIToken(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `UPDATE api_tokens SET last_used_at=$2 WHERE id=$1`, id, time.Now())
 	return err
 }
 
@@ -574,7 +618,7 @@ type scanner interface {
 
 func scanUser(row scanner) (*models.User, error) {
 	var u models.User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.SSHPublicKey, &u.TailscaleAuthKey, &u.IsAdmin, &u.CreatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.TailscaleAuthKey, &u.IsAdmin, &u.LoginType, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -643,6 +687,22 @@ func scanProvisionerKey(row scanner) (*models.ProvisionerKey, error) {
 		return nil, ErrNotFound
 	}
 	return &k, err
+}
+
+func scanAPIToken(row scanner) (*models.APIToken, error) {
+	var t models.APIToken
+	var lastUsed *time.Time
+	err := row.Scan(&t.ID, &t.UserID, &t.TokenHash, &t.TokenPrefix, &t.Name, &t.ExpiresAt, &lastUsed, &t.CreatedAt, &t.CreatedBy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastUsed != nil {
+		t.LastUsedAt = *lastUsed
+	}
+	return &t, nil
 }
 
 func scanOrg(row scanner) (*models.Organization, error) {
@@ -733,7 +793,6 @@ CREATE TABLE IF NOT EXISTS users (
     email           TEXT UNIQUE NOT NULL,
     name            TEXT NOT NULL DEFAULT '',
     password_hash   TEXT NOT NULL DEFAULT '',
-    ssh_public_key  TEXT NOT NULL DEFAULT '',
     tailscale_auth_key TEXT NOT NULL DEFAULT '',
     is_admin        BOOLEAN NOT NULL DEFAULT FALSE,
     created_at      TIMESTAMPTZ NOT NULL
@@ -831,4 +890,18 @@ CREATE TABLE IF NOT EXISTS team_members (
     PRIMARY KEY (team_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS team_members_user_id_idx ON team_members(user_id);
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id           TEXT PRIMARY KEY,
+    user_id      TEXT NOT NULL,
+    token_hash   TEXT NOT NULL UNIQUE,
+    token_prefix TEXT NOT NULL,
+    name         TEXT NOT NULL,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    last_used_at TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL,
+    created_by   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS api_tokens_user_id_idx ON api_tokens(user_id);
+CREATE INDEX IF NOT EXISTS api_tokens_hash_idx ON api_tokens(token_hash);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS login_type TEXT NOT NULL DEFAULT '';
 `

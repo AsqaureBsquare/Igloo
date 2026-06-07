@@ -79,10 +79,24 @@ type User struct {
 	Email            string    `json:"email"`
 	Name             string    `json:"name"`
 	PasswordHash     string    `json:"-"`
-	SSHPublicKey     string    `json:"ssh_public_key,omitempty"`
 	TailscaleAuthKey string    `json:"tailscale_auth_key,omitempty"`
 	IsAdmin          bool      `json:"is_admin,omitempty"`
+	LoginType        string    `json:"login_type,omitempty"` // "password" | "oidc" | "none"
 	CreatedAt        time.Time `json:"created_at"`
+}
+
+// APIToken is a long-lived DB-backed token for service accounts and CI/CD.
+// The raw token is only returned at creation time; TokenHash is stored.
+type APIToken struct {
+	ID          string    `json:"id"`
+	UserID      string    `json:"user_id"`
+	TokenHash   string    `json:"-"`
+	TokenPrefix string    `json:"token_prefix"` // first 10 chars, for display only
+	Name        string    `json:"name"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	LastUsedAt  time.Time `json:"last_used_at,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	CreatedBy   string    `json:"created_by"`
 }
 
 // ─── Organizations ────────────────────────────────────────────────────────────

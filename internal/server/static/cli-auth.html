@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>igloo — CLI Login</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --void:        #00060f;
+    --glass:       rgba(0,180,255,0.04);
+    --border:      rgba(0,180,255,0.12);
+    --border-glow: rgba(0,180,255,0.35);
+    --cyan:        #00b4ff;
+    --cyan-dim:    rgba(0,180,255,0.6);
+    --text:        #e8f4ff;
+    --text-muted:  rgba(232,244,255,0.45);
+    --green:       #00ff88;
+    --red:         #ff4466;
+  }
+
+  html, body {
+    min-height: 100vh;
+    background: var(--void);
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse 60% 40% at 20% 10%, rgba(0,180,255,0.07) 0%, transparent 70%),
+      radial-gradient(ellipse 40% 30% at 80% 90%, rgba(0,80,200,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .card {
+    position: relative;
+    width: 420px;
+    background: var(--glass);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    backdrop-filter: blur(24px);
+    box-shadow: 0 0 60px rgba(0,180,255,0.05), 0 24px 48px rgba(0,0,0,0.4);
+  }
+
+  .logo {
+    font-size: 22px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #00b4ff 0%, #0066ff 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 6px;
+  }
+
+  .subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 32px; }
+
+  h2 { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+
+  .desc { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; line-height: 1.6; }
+
+  label {
+    display: block;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 7px;
+  }
+
+  input {
+    width: 100%;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.2s;
+    margin-bottom: 14px;
+  }
+  input:focus { border-color: var(--cyan-dim); }
+  input::placeholder { color: var(--text-muted); }
+
+  button {
+    width: 100%;
+    padding: 11px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    transition: all 0.15s;
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, rgba(0,180,255,0.2), rgba(0,100,220,0.2));
+    border: 1px solid var(--border-glow);
+    color: var(--cyan);
+  }
+  .btn-primary:hover { background: linear-gradient(135deg, rgba(0,180,255,0.3), rgba(0,100,220,0.3)); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-approve {
+    background: linear-gradient(135deg, rgba(0,255,136,0.15), rgba(0,200,100,0.1));
+    border: 1px solid rgba(0,255,136,0.4);
+    color: var(--green);
+    font-size: 15px;
+    padding: 13px;
+  }
+  .btn-approve:hover { background: linear-gradient(135deg, rgba(0,255,136,0.25), rgba(0,200,100,0.18)); }
+
+  .code-display {
+    background: rgba(0,0,0,0.5);
+    border: 1px solid var(--border-glow);
+    border-radius: 10px;
+    padding: 18px;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+
+  .code-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+
+  .code-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--cyan);
+    letter-spacing: 0.12em;
+  }
+
+  .error-msg { font-size: 13px; color: var(--red); margin-bottom: 12px; display: none; }
+
+  .success-view { display: none; text-align: center; padding: 12px 0; }
+  .success-icon { font-size: 40px; margin-bottom: 14px; }
+  .success-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; color: var(--green); }
+  .success-desc { font-size: 13px; color: var(--text-muted); }
+
+  .view { display: none; }
+  .view.active { display: block; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">igloo</div>
+  <div class="subtitle">Serverless dev workspaces</div>
+
+  <!-- Login form -->
+  <div id="view-login" class="view active">
+    <h2>Sign in to continue</h2>
+    <p class="desc">Log in to approve your CLI session.</p>
+    <div class="error-msg" id="login-error"></div>
+    <label>Email</label>
+    <input id="email" type="email" placeholder="you@example.com" autocomplete="email">
+    <label>Password</label>
+    <input id="password" type="password" placeholder="••••••••" autocomplete="current-password">
+    <button class="btn-primary" id="login-btn" onclick="login()">Sign in</button>
+  </div>
+
+  <!-- Approve view -->
+  <div id="view-approve" class="view">
+    <h2>Approve CLI login</h2>
+    <p class="desc">Your terminal is waiting. Confirm this is the right code, then click Approve.</p>
+    <div class="code-display">
+      <div class="code-label">One-time code</div>
+      <div class="code-value" id="code-display"></div>
+    </div>
+    <div class="error-msg" id="approve-error"></div>
+    <button class="btn-approve" id="approve-btn" onclick="approve()">Approve</button>
+  </div>
+
+  <!-- Success view -->
+  <div id="view-success" class="view">
+    <div class="success-view" style="display:block">
+      <div class="success-icon">✓</div>
+      <div class="success-title">Approved!</div>
+      <div class="success-desc">You're logged in. Return to your terminal.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+  var code = new URLSearchParams(location.search).get('code');
+  var bearerToken = null;
+
+  function show(id) {
+    document.querySelectorAll('.view').forEach(function(el) { el.classList.remove('active'); });
+    document.getElementById(id).classList.add('active');
+  }
+
+  async function init() {
+    if (!code) {
+      // No code — just show a generic message
+      document.getElementById('view-login').querySelector('p').textContent =
+        'Open your terminal and run: igloo login <server-url>';
+      return;
+    }
+    document.getElementById('code-display').textContent = code;
+
+    // Check if already logged in
+    var stored = localStorage.getItem('igloo_token');
+    if (stored) {
+      var ok = await verifyToken(stored);
+      if (ok) {
+        bearerToken = stored;
+        show('view-approve');
+        return;
+      }
+      localStorage.removeItem('igloo_token');
+    }
+    show('view-login');
+  }
+
+  async function verifyToken(token) {
+    try {
+      var res = await fetch('/api/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
+      return res.ok;
+    } catch { return false; }
+  }
+
+  async function login() {
+    var btn = document.getElementById('login-btn');
+    var errEl = document.getElementById('login-error');
+    errEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
+
+    try {
+      var res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: document.getElementById('email').value.trim(),
+          password: document.getElementById('password').value
+        })
+      });
+      var data = await res.json();
+      if (!data.token) {
+        errEl.textContent = data.error || 'Invalid credentials';
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+        return;
+      }
+      localStorage.setItem('igloo_token', data.token);
+      bearerToken = data.token;
+      show('view-approve');
+    } catch (e) {
+      errEl.textContent = 'Connection error';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Sign in';
+    }
+  }
+
+  async function approve() {
+    var btn = document.getElementById('approve-btn');
+    var errEl = document.getElementById('approve-error');
+    errEl.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Approving…';
+
+    try {
+      var res = await fetch('/api/auth/device/approve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + bearerToken
+        },
+        body: JSON.stringify({ code: code })
+      });
+      if (res.status === 410) {
+        errEl.textContent = 'Code expired — run igloo login again.';
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Approve';
+        return;
+      }
+      if (!res.ok) {
+        errEl.textContent = 'Approval failed — try again.';
+        errEl.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Approve';
+        return;
+      }
+      show('view-success');
+    } catch (e) {
+      errEl.textContent = 'Connection error';
+      errEl.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Approve';
+    }
+  }
+
+  document.getElementById('password').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') login();
+  });
+
+  init();
+</script>
+</body>
+</html>

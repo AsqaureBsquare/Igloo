@@ -64,7 +64,6 @@ type claimResponse struct {
 	Vars          map[string]string `json:"vars"`
 	Meta          map[string]string `json:"meta"`
 	Files         map[string]string `json:"files"`
-	SSHKey        string            `json:"ssh_key"`
 	ServerURL     string            `json:"server_url"`
 	StateBucket   string            `json:"state_bucket"`
 	StateRegion   string            `json:"state_region"`
@@ -272,7 +271,6 @@ func (d *Daemon) buildVars(job *claimResponse, desiredCount string) map[string]s
 	vars["workspace_name"] = job.WorkspaceName
 	vars["server_url"] = job.ServerURL
 	vars["agent_token"] = job.AgentToken
-	vars["ssh_public_key"] = job.SSHKey
 	vars["desired_count"] = desiredCount
 	vars["cluster_name"] = os.Getenv("IGLOO_ECS_CLUSTER")
 	vars["task_execution_role_arn"] = os.Getenv("IGLOO_ECS_EXECUTION_ROLE_ARN")

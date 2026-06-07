@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"embed"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -75,11 +76,22 @@ func New(st store.Store, a *auth.Auth) *Server {
 
 	// ─── Public routes ────────────────────────────────────────────────────────
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/cli-auth", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		f, _ := uiFS.Open("static/cli-auth.html")
+		defer f.Close()
+		io.Copy(w, f)
+	})
 	r.Get("/api/auth/config", h.AuthConfig)
 	r.Post("/api/auth/register", h.Register)
 	r.Post("/api/auth/login", h.Login)
 	r.Get("/api/auth/oidc/login", h.OIDCLogin)
 	r.Get("/api/auth/oidc/callback", h.OIDCCallback)
+	r.Route("/api/auth/device", func(r chi.Router) {
+		r.Post("/init", h.DeviceInit)
+		r.Get("/poll", h.DevicePoll)
+		r.With(h.RequireAuth).Post("/approve", h.DeviceApprove)
+	})
 	r.Get("/ws", h.WebSocket)
 
 	// ─── Authenticated routes ─────────────────────────────────────────────────
@@ -87,8 +99,14 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Use(h.RequireAuth)
 
 		r.Get("/api/auth/me", h.Me)
-		r.Put("/api/auth/me/ssh-key", h.UpdateSSHKey)
 		r.Put("/api/auth/me/tailscale-key", h.UpdateTailscaleKey)
+
+		// API tokens (Coder-style service account tokens)
+		r.Route("/api/tokens", func(r chi.Router) {
+			r.Post("/", h.CreateToken)
+			r.Get("/", h.ListTokens)
+			r.Delete("/{id}", h.RevokeToken)
+		})
 
 		// Workspace + template routes — org context injected when X-Org-ID header is present.
 		r.Group(func(r chi.Router) {
@@ -136,6 +154,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Group(func(r chi.Router) {
 			r.Use(h.RequireAdmin)
 			r.Get("/api/admin/users", h.AdminListUsers)
+			r.Post("/api/admin/users", h.AdminCreateUser)
 			r.Put("/api/admin/users/{id}", h.AdminUpdateUser)
 			r.Delete("/api/admin/users/{id}", h.AdminDeleteUser)
 			r.Get("/api/admin/workspaces", h.AdminListWorkspaces)

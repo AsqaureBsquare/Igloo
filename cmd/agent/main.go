@@ -27,6 +27,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"github.com/igloo-dev/igloo/internal/tailnet"
+	"golang.org/x/crypto/ssh"
 )
 
 type Message struct {
@@ -68,8 +69,14 @@ func main() {
 
 	log.Printf("[igloo-agent] starting (workspace %s)", workspaceID)
 
-	// Connect to Igloo's built-in WireGuard coordinator so `igloo ssh` works.
-	go startTailnet(serverURL, token, workspaceID)
+	// Shared SSH server config (one ephemeral host key for both paths).
+	sshCfg := newSSHConfig()
+
+	// Proxy path: igloo proxy connects via WebSocket relay to 127.0.0.1:2222.
+	go serveSSHOnLocalhost(sshCfg)
+
+	// WireGuard path: igloo ssh connects via tailnet tunnel to WG IP:22.
+	go startTailnet(serverURL, token, workspaceID, sshCfg)
 
 	// Start code-server if installed
 	go startCodeServer(workspaceID)
@@ -90,14 +97,13 @@ func main() {
 // on SSH port 22 of the virtual WireGuard interface. When a CLI user runs
 // `igloo ssh <workspace>`, their client connects to the same coordinator,
 // exchanges WireGuard keys, and can SSH directly — no Tailscale account needed.
-func startTailnet(serverURL, token, workspaceID string) {
+func startTailnet(serverURL, token, workspaceID string, cfg *ssh.ServerConfig) {
 	if serverURL == "" || token == "" || workspaceID == "" {
 		return
 	}
-	// Retry with backoff — the server may not be ready on first boot
 	backoff := 3 * time.Second
 	for {
-		if err := runTailnet(serverURL, token, workspaceID); err != nil {
+		if err := runTailnet(serverURL, token, workspaceID, cfg); err != nil {
 			log.Printf("[tailnet] disconnected: %v — reconnecting in %v", err, backoff)
 		}
 		time.Sleep(backoff)
@@ -107,7 +113,7 @@ func startTailnet(serverURL, token, workspaceID string) {
 	}
 }
 
-func runTailnet(serverURL, token, workspaceID string) error {
+func runTailnet(serverURL, token, workspaceID string, cfg *ssh.ServerConfig) error {
 	node, err := tailnet.Connect(serverURL, workspaceID, token, "agent")
 	if err != nil {
 		return err
@@ -115,8 +121,6 @@ func runTailnet(serverURL, token, workspaceID string) error {
 	defer node.Close()
 	log.Printf("[tailnet] connected as %s — ready for `igloo ssh`", node.MyIP)
 
-	// Listen on all addresses on the WireGuard virtual interface.
-	// Using nil avoids gvisor IPv4 binding quirks with 4-byte net.IP values.
 	ln, err := node.Tnet.ListenTCP(&net.TCPAddr{Port: 22})
 	if err != nil {
 		return err
@@ -128,21 +132,8 @@ func runTailnet(serverURL, token, workspaceID string) error {
 		if err != nil {
 			return err
 		}
-		go forwardToSSHD(conn)
+		go serveSSH(conn, cfg)
 	}
-}
-
-func forwardToSSHD(remote net.Conn) {
-	defer remote.Close()
-	local, err := net.Dial("tcp", "127.0.0.1:22")
-	if err != nil {
-		return
-	}
-	defer local.Close()
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(local, remote); done <- struct{}{} }()
-	go func() { io.Copy(remote, local); done <- struct{}{} }()
-	<-done
 }
 
 func startCodeServer(workspaceID string) {

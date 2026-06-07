@@ -92,20 +92,8 @@ resource "aws_iam_role_policy" "igloo_server_dynamo" {
           "dynamodb:DescribeTable",
         ]
         Resource = [
-          # Core tables (created by infra/ecs)
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-users",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-users/index/*",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-workspaces",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-workspaces/index/*",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-templates",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-templates/index/*",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-ws-jobs",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-ws-jobs/index/*",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-provisioner-keys",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-provisioner-keys/index/*",
-          # Single-table for orgs/teams (created by infra/ecs)
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-entities",
-          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo-entities/index/*",
+          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo",
+          "arn:aws:dynamodb:${var.region}:${data.aws_caller_identity.current.account_id}:table/igloo/index/*",
         ]
       },
       {

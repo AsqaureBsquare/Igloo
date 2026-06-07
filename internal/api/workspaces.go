@@ -192,13 +192,9 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 			h.TryImmediateDispatch(r.Context())
 		}
 	} else {
-		sshKey := ""
-		if user, err := h.Store.GetUser(r.Context(), ws.UserID); err == nil {
-			sshKey = user.SSHPublicKey
-		}
 		tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
 		serverURL := serverURLFromRequest(r)
-		go h.launchWorkspace(ws, tmpl, serverURL, sshKey)
+		go h.launchWorkspace(ws, tmpl, serverURL)
 	}
 
 	h.json(w, http.StatusOK, ws)
@@ -425,7 +421,7 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 
 // ─── Launch dispatch ──────────────────────────────────────────────────────────
 
-func (h *Handler) launchWorkspace(ws *models.Workspace, tmpl *models.Template, serverURL, sshKey string) {
+func (h *Handler) launchWorkspace(ws *models.Workspace, tmpl *models.Template, serverURL string) {
 	var err error
 	switch ws.Provider {
 	case "docker":

@@ -146,11 +146,6 @@ func buildClaimResponse(ctx context.Context, h *Handler, job *models.ProvisionJo
 		files = tmpl.Files
 	}
 
-	sshKey := ""
-	if user, err := h.Store.GetUser(ctx, ws.UserID); err == nil {
-		sshKey = user.SSHPublicKey
-	}
-
 	region := os.Getenv("AWS_REGION")
 	if region == "" {
 		region = "us-east-1"
@@ -167,7 +162,6 @@ func buildClaimResponse(ctx context.Context, h *Handler, job *models.ProvisionJo
 		Vars:          ws.Vars,
 		Meta:          ws.Meta,
 		Files:         files,
-		SSHKey:        sshKey,
 		ServerURL:     os.Getenv("IGLOO_SERVER_URL"),
 		StateBucket:   os.Getenv("IGLOO_TF_STATE_BUCKET"),
 		StateRegion:   region,

@@ -22,7 +22,9 @@ type MemoryStore struct {
 	templates      map[string]*models.Template       // id → template
 	jobs           map[string]*models.ProvisionJob
 	provKeys       map[string]*models.ProvisionerKey // id → key
-	byTokenHash    map[string]string                 // tokenHash → id
+	byTokenHash    map[string]string                 // tokenHash → provKey id
+	apiTokens      map[string]*models.APIToken       // id → token
+	apiByHash      map[string]string                 // tokenHash → id
 	platformConfig *models.PlatformConfig
 	orgs           map[string]*models.Organization   // id → org
 	orgsBySlug     map[string]string                 // slug → id
@@ -40,12 +42,70 @@ func NewMemory() *MemoryStore {
 		jobs:        make(map[string]*models.ProvisionJob),
 		provKeys:    make(map[string]*models.ProvisionerKey),
 		byTokenHash: make(map[string]string),
+		apiTokens:   make(map[string]*models.APIToken),
+		apiByHash:   make(map[string]string),
 		orgs:        make(map[string]*models.Organization),
 		orgsBySlug:  make(map[string]string),
 		orgMembers:  make(map[string]*models.OrgMember),
 		teams:       make(map[string]*models.Team),
 		teamMembers: make(map[string]*models.TeamMember),
 	}
+}
+
+// ─── APITokens ────────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateAPIToken(_ context.Context, t *models.APIToken) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.apiTokens[t.ID] = t
+	s.apiByHash[t.TokenHash] = t.ID
+	return nil
+}
+
+func (s *MemoryStore) GetAPITokenByHash(_ context.Context, hash string) (*models.APIToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	id, ok := s.apiByHash[hash]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	t := s.apiTokens[id]
+	cp := *t
+	return &cp, nil
+}
+
+func (s *MemoryStore) ListAPITokens(_ context.Context, userID string) ([]*models.APIToken, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*models.APIToken
+	for _, t := range s.apiTokens {
+		if t.UserID == userID {
+			cp := *t
+			out = append(out, &cp)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) DeleteAPIToken(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.apiTokens[id]
+	if !ok {
+		return ErrNotFound
+	}
+	delete(s.apiByHash, t.TokenHash)
+	delete(s.apiTokens, id)
+	return nil
+}
+
+func (s *MemoryStore) TouchAPIToken(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.apiTokens[id]; ok {
+		t.LastUsedAt = time.Now()
+	}
+	return nil
 }
 
 // ─── Users ────────────────────────────────────────────────────────────────────
@@ -151,7 +211,10 @@ func (s *MemoryStore) ListWorkspaces(_ context.Context, userID, orgID string) ([
 	defer s.mu.RUnlock()
 	var out []*models.Workspace
 	for _, w := range s.workspaces {
-		if w.UserID != userID || w.Status == models.StatusDeleted {
+		if w.Status == models.StatusDeleted {
+			continue
+		}
+		if userID != "" && w.UserID != userID {
 			continue
 		}
 		if orgID != "" && w.OrgID != orgID {

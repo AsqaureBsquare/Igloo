@@ -19,6 +19,7 @@ type MongoStore struct {
 	templates   *mongo.Collection
 	jobs        *mongo.Collection
 	pkeys       *mongo.Collection
+	apiTokens   *mongo.Collection
 	config      *mongo.Collection
 	orgs        *mongo.Collection
 	orgMembers  *mongo.Collection
@@ -41,6 +42,7 @@ func NewMongoStore(ctx context.Context, uri string) (*MongoStore, error) {
 		templates:   db.Collection("templates"),
 		jobs:        db.Collection("jobs"),
 		pkeys:       db.Collection("provisioner_keys"),
+		apiTokens:   db.Collection("api_tokens"),
 		config:      db.Collection("platform_config"),
 		orgs:        db.Collection("organizations"),
 		orgMembers:  db.Collection("org_members"),
@@ -101,7 +103,6 @@ type mUserDoc struct {
 	Email            string    `bson:"email"`
 	Name             string    `bson:"name"`
 	PasswordHash     string    `bson:"password_hash"`
-	SSHPublicKey     string    `bson:"ssh_public_key"`
 	TailscaleAuthKey string    `bson:"tailscale_auth_key"`
 	IsAdmin          bool      `bson:"is_admin"`
 	CreatedAt        time.Time `bson:"created_at"`
@@ -210,8 +211,8 @@ type mTeamMemberDoc struct {
 func (s *MongoStore) CreateUser(ctx context.Context, u *models.User) error {
 	doc := mUserDoc{
 		ID: u.ID, Email: u.Email, Name: u.Name,
-		PasswordHash: u.PasswordHash, SSHPublicKey: u.SSHPublicKey,
-		TailscaleAuthKey: u.TailscaleAuthKey, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
+		PasswordHash: u.PasswordHash, TailscaleAuthKey: u.TailscaleAuthKey,
+		IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
 	}
 	_, err := s.users.InsertOne(ctx, doc)
 	if mongo.IsDuplicateKeyError(err) {
@@ -247,8 +248,8 @@ func (s *MongoStore) GetUserByEmail(ctx context.Context, email string) (*models.
 func (s *MongoStore) UpdateUser(ctx context.Context, u *models.User) error {
 	doc := mUserDoc{
 		ID: u.ID, Email: u.Email, Name: u.Name,
-		PasswordHash: u.PasswordHash, SSHPublicKey: u.SSHPublicKey,
-		TailscaleAuthKey: u.TailscaleAuthKey, IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
+		PasswordHash: u.PasswordHash, TailscaleAuthKey: u.TailscaleAuthKey,
+		IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
 	}
 	_, err := s.users.ReplaceOne(ctx, bson.M{"_id": u.ID}, doc)
 	return err
@@ -279,8 +280,8 @@ func (s *MongoStore) DeleteUser(ctx context.Context, id string) error {
 func mUserFromDoc(d mUserDoc) *models.User {
 	return &models.User{
 		ID: d.ID, Email: d.Email, Name: d.Name,
-		PasswordHash: d.PasswordHash, SSHPublicKey: d.SSHPublicKey,
-		TailscaleAuthKey: d.TailscaleAuthKey, IsAdmin: d.IsAdmin, CreatedAt: d.CreatedAt,
+		PasswordHash: d.PasswordHash, TailscaleAuthKey: d.TailscaleAuthKey,
+		IsAdmin: d.IsAdmin, CreatedAt: d.CreatedAt,
 	}
 }
 
@@ -885,4 +886,72 @@ func (s *MongoStore) collectTeamMembers(ctx context.Context, filter bson.M) ([]*
 		}
 	}
 	return out, cur.Err()
+}
+
+// ─── APITokens ────────────────────────────────────────────────────────────────
+
+type mAPITokenDoc struct {
+	ID          string    `bson:"_id"`
+	UserID      string    `bson:"user_id"`
+	TokenHash   string    `bson:"token_hash"`
+	TokenPrefix string    `bson:"token_prefix"`
+	Name        string    `bson:"name"`
+	ExpiresAt   time.Time `bson:"expires_at"`
+	LastUsedAt  time.Time `bson:"last_used_at"`
+	CreatedAt   time.Time `bson:"created_at"`
+	CreatedBy   string    `bson:"created_by"`
+}
+
+func (s *MongoStore) CreateAPIToken(ctx context.Context, t *models.APIToken) error {
+	_, err := s.apiTokens.InsertOne(ctx, mAPITokenDoc{
+		ID: t.ID, UserID: t.UserID, TokenHash: t.TokenHash, TokenPrefix: t.TokenPrefix,
+		Name: t.Name, ExpiresAt: t.ExpiresAt, CreatedAt: t.CreatedAt, CreatedBy: t.CreatedBy,
+	})
+	return err
+}
+
+func (s *MongoStore) GetAPITokenByHash(ctx context.Context, hash string) (*models.APIToken, error) {
+	var d mAPITokenDoc
+	if err := s.apiTokens.FindOne(ctx, bson.M{"token_hash": hash}).Decode(&d); err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &models.APIToken{
+		ID: d.ID, UserID: d.UserID, TokenHash: d.TokenHash, TokenPrefix: d.TokenPrefix,
+		Name: d.Name, ExpiresAt: d.ExpiresAt, LastUsedAt: d.LastUsedAt,
+		CreatedAt: d.CreatedAt, CreatedBy: d.CreatedBy,
+	}, nil
+}
+
+func (s *MongoStore) ListAPITokens(ctx context.Context, userID string) ([]*models.APIToken, error) {
+	cur, err := s.apiTokens.Find(ctx, bson.M{"user_id": userID})
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	var out []*models.APIToken
+	for cur.Next(ctx) {
+		var d mAPITokenDoc
+		if cur.Decode(&d) == nil {
+			out = append(out, &models.APIToken{
+				ID: d.ID, UserID: d.UserID, TokenPrefix: d.TokenPrefix,
+				Name: d.Name, ExpiresAt: d.ExpiresAt, LastUsedAt: d.LastUsedAt,
+				CreatedAt: d.CreatedAt, CreatedBy: d.CreatedBy,
+			})
+		}
+	}
+	return out, cur.Err()
+}
+
+func (s *MongoStore) DeleteAPIToken(ctx context.Context, id string) error {
+	_, err := s.apiTokens.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+func (s *MongoStore) TouchAPIToken(ctx context.Context, id string) error {
+	_, err := s.apiTokens.UpdateOne(ctx, bson.M{"_id": id},
+		bson.M{"$set": bson.M{"last_used_at": time.Now()}})
+	return err
 }

@@ -225,6 +225,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if user.LoginType == "none" {
+		h.err(w, http.StatusForbidden, "this account cannot log in interactively — use an API token")
+		return
+	}
+
 	if !h.Auth.CheckPassword(user.PasswordHash, body.Password) {
 		h.err(w, http.StatusUnauthorized, "invalid email or password")
 		return
@@ -242,33 +247,91 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /api/auth/device/init — CLI registers a one-time code (public, no auth)
+func (h *Handler) DeviceInit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := h.decode(r, &body); err != nil || body.Code == "" {
+		h.err(w, http.StatusBadRequest, "missing code")
+		return
+	}
+	h.initDeviceCodes()
+	h.gcDeviceCodes()
+	h.deviceMu.Lock()
+	h.deviceCodes[body.Code] = &deviceEntry{expiresAt: time.Now().Add(5 * time.Minute)}
+	h.deviceMu.Unlock()
+	w.WriteHeader(http.StatusOK)
+}
+
+// POST /api/auth/device/approve — browser approves a code (requires auth)
+func (h *Handler) DeviceApprove(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := h.decode(r, &body); err != nil || body.Code == "" {
+		h.err(w, http.StatusBadRequest, "missing code")
+		return
+	}
+	h.deviceMu.Lock()
+	entry, ok := h.deviceCodes[body.Code]
+	if !ok || time.Now().After(entry.expiresAt) {
+		h.deviceMu.Unlock()
+		h.err(w, http.StatusGone, "code expired or invalid")
+		return
+	}
+	h.deviceMu.Unlock()
+
+	user, err := h.Store.GetUser(r.Context(), ctxUserID(r))
+	if err != nil {
+		h.err(w, http.StatusNotFound, "user not found")
+		return
+	}
+	token, err := h.Auth.SignCLI(user.ID, user.Email)
+	if err != nil {
+		h.err(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	h.deviceMu.Lock()
+	entry.token = token
+	h.deviceMu.Unlock()
+
+	h.json(w, http.StatusOK, map[string]string{"email": user.Email})
+}
+
+// GET /api/auth/device/poll?code=XXXX — CLI polls until approved (public, no auth)
+func (h *Handler) DevicePoll(w http.ResponseWriter, r *http.Request) {
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		h.err(w, http.StatusBadRequest, "missing code")
+		return
+	}
+	h.deviceMu.Lock()
+	entry, ok := h.deviceCodes[code]
+	if !ok || time.Now().After(entry.expiresAt) {
+		h.deviceMu.Unlock()
+		h.err(w, http.StatusGone, "code expired or invalid")
+		return
+	}
+	token := entry.token
+	if token != "" {
+		delete(h.deviceCodes, code) // one-time use
+	}
+	h.deviceMu.Unlock()
+
+	if token == "" {
+		w.WriteHeader(http.StatusAccepted) // 202 = still pending
+		return
+	}
+	h.json(w, http.StatusOK, map[string]string{"token": token})
+}
+
 // GET /api/auth/me
 func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 	user, err := h.Store.GetUser(r.Context(), ctxUserID(r))
 	if err != nil {
 		h.err(w, http.StatusNotFound, "user not found")
-		return
-	}
-	h.json(w, http.StatusOK, user)
-}
-
-// PUT /api/auth/me/ssh-key
-func (h *Handler) UpdateSSHKey(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		SSHPublicKey string `json:"ssh_public_key"`
-	}
-	if err := h.decode(r, &body); err != nil {
-		h.err(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	user, err := h.Store.GetUser(r.Context(), ctxUserID(r))
-	if err != nil {
-		h.err(w, http.StatusNotFound, "user not found")
-		return
-	}
-	user.SSHPublicKey = strings.TrimSpace(body.SSHPublicKey)
-	if err := h.Store.UpdateUser(r.Context(), user); err != nil {
-		h.err(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	h.json(w, http.StatusOK, user)
@@ -476,7 +539,8 @@ func hasGroupOverlap(allowed, userGroups []string) bool {
 	return false
 }
 
-// Middleware: require valid user JWT, inject user_id into context.
+// RequireAuth validates either a JWT session token or a DB-backed API token.
+// JWTs have three dot-separated segments; opaque API tokens do not.
 func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -484,12 +548,27 @@ func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 			h.err(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		claims, err := h.Auth.ParseUser(token)
-		if err != nil {
-			h.err(w, http.StatusUnauthorized, "unauthorized")
-			return
+		var userID string
+		if strings.Count(token, ".") == 2 {
+			// JWT path
+			claims, err := h.Auth.ParseUser(token)
+			if err != nil {
+				h.err(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			userID = claims.UserID
+		} else {
+			// DB API token path
+			hash := hashToken(token)
+			t, err := h.Store.GetAPITokenByHash(r.Context(), hash)
+			if err != nil || time.Now().After(t.ExpiresAt) {
+				h.err(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			go h.Store.TouchAPIToken(context.Background(), t.ID)
+			userID = t.UserID
 		}
-		ctx := context.WithValue(r.Context(), ctxKeyUserID, claims.UserID)
+		ctx := context.WithValue(r.Context(), ctxKeyUserID, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

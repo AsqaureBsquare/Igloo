@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"sync"
+	"time"
 
 	"github.com/igloo-dev/igloo/internal/auth"
 	"github.com/igloo-dev/igloo/internal/relay"
@@ -22,6 +24,33 @@ type Handler struct {
 	OIDC                *auth.OIDCProvider
 	DisablePasswordAuth bool     // when true, /login and /register return 403
 	AllowedGroups       []string // if non-empty, user must belong to at least one of these IdP groups
+
+	deviceMu    sync.Mutex
+	deviceCodes map[string]*deviceEntry // code → entry
+}
+
+type deviceEntry struct {
+	token     string    // JWT set after approval; empty while pending
+	expiresAt time.Time
+}
+
+func (h *Handler) initDeviceCodes() {
+	h.deviceMu.Lock()
+	if h.deviceCodes == nil {
+		h.deviceCodes = make(map[string]*deviceEntry)
+	}
+	h.deviceMu.Unlock()
+}
+
+func (h *Handler) gcDeviceCodes() {
+	h.deviceMu.Lock()
+	defer h.deviceMu.Unlock()
+	now := time.Now()
+	for code, e := range h.deviceCodes {
+		if now.After(e.expiresAt) {
+			delete(h.deviceCodes, code)
+		}
+	}
 }
 
 func (h *Handler) json(w http.ResponseWriter, status int, v any) {

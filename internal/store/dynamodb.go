@@ -543,7 +543,7 @@ func (d *DynamoStore) DeleteWorkspace(ctx context.Context, id string) error {
 
 func tplToItem(t *models.Template) ddbTemplate {
 	gsi1pk := "ORG#" + t.OrgID
-	if t.Builtin {
+	if t.Builtin || t.OrgID == "" {
 		gsi1pk = "BUILTIN"
 	}
 	return ddbTemplate{

@@ -93,10 +93,12 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	orgID := ctxOrgID(r)
 	now := time.Now()
 	t := &models.Template{
 		ID:          uuid.NewString(),
-		OrgID:       ctxOrgID(r),
+		OrgID:       orgID,
+		Builtin:     orgID == "",
 		Name:        body.Name,
 		Description: body.Description,
 		Provider:    body.Provider,

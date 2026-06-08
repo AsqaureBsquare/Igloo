@@ -54,6 +54,8 @@ spec:
               value: {{ .Values.provisioner.aws.region | quote }}
             - name: IGLOO_WORKSPACE_IMAGE
               value: {{ .Values.provisioner.workspace.image | quote }}
+            - name: IGLOO_SEED_TEMPLATES
+              value: "true"
             # DynamoDB table names
             - name: IGLOO_DYNAMO_USERS_TABLE
               value: {{ .Values.server.dynamo.usersTable | quote }}

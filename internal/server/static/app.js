@@ -28,7 +28,7 @@ const api = (() => {
     },
     workspaces: {
       list:     ()             => req('GET',    '/api/workspaces'),
-      create:   (name, tplId) => req('POST',   '/api/workspaces', { name, template_id: tplId }),
+      create:   (name, tplId, vars) => req('POST',   '/api/workspaces', { name, template_id: tplId, vars: vars || {} }),
       get:      (id)           => req('GET',    `/api/workspaces/${id}`),
       start:    (id)           => req('POST',   `/api/workspaces/${id}/start`),
       stop:     (id)           => req('POST',   `/api/workspaces/${id}/stop`),
@@ -1140,8 +1140,51 @@ async function renderOrgDetailView() {
 // ─── Modals ───────────────────────────────────────────────────────────────────
 let selectedTemplateId = null;
 
+function renderTemplateVarForm(tpl) {
+  if (!tpl || !tpl.variables || !tpl.variables.length) return '';
+  const fields = tpl.variables.map(v => {
+    const id = `ws-var-${v.name}`;
+    const label = `<label for="${id}" style="display:flex;align-items:center;gap:6px">${esc(v.name)}${v.required ? '<span style="color:var(--accent)">*</span>' : ''}</label>`;
+    const hint = v.description ? `<div class="field-hint">${esc(v.description)}</div>` : '';
+    let input;
+    if (v.type === 'select' && v.options?.length) {
+      input = `<select id="${id}" class="ws-var-field" data-var="${esc(v.name)}">
+        ${v.options.map(o => `<option value="${esc(o)}"${o === v.default ? ' selected' : ''}>${esc(o)}</option>`).join('')}
+      </select>`;
+    } else if (v.type === 'bool') {
+      const checked = v.default === 'true' ? 'checked' : '';
+      input = `<label class="toggle-label" style="margin-top:6px">
+        <input type="checkbox" id="${id}" class="ws-var-field" data-var="${esc(v.name)}" ${checked} />
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span style="margin-left:8px;color:var(--muted);font-size:13px">${v.default === 'true' ? 'Enabled' : 'Disabled'}</span>
+      </label>`;
+    } else if (v.type === 'number') {
+      input = `<input id="${id}" class="ws-var-field" data-var="${esc(v.name)}" type="number" value="${esc(v.default||'')}" ${v.min ? `min="${esc(v.min)}"` : ''} ${v.max ? `max="${esc(v.max)}"` : ''} placeholder="${esc(v.default||v.name)}" />`;
+    } else {
+      input = `<input id="${id}" class="ws-var-field" data-var="${esc(v.name)}" type="text" value="${esc(v.default||'')}" placeholder="${esc(v.default||v.name)}" />`;
+    }
+    return `<div class="field" style="margin-bottom:12px">${label}${hint}${input}</div>`;
+  }).join('');
+  return `<div class="ws-vars-section">
+    <div class="ws-vars-header">Parameters</div>
+    ${fields}
+  </div>`;
+}
+
+function collectWsVars() {
+  const vars = {};
+  document.querySelectorAll('.ws-var-field').forEach(el => {
+    const name = el.getAttribute('data-var');
+    if (!name) return;
+    if (el.type === 'checkbox') vars[name] = el.checked ? 'true' : 'false';
+    else vars[name] = el.value;
+  });
+  return vars;
+}
+
 function showNewIglooModal() {
   selectedTemplateId = state.templates[0]?.id || null;
+  const firstTpl = state.templates.find(t => t.id === selectedTemplateId);
   document.body.insertAdjacentHTML('beforeend', `
   <div class="modal-overlay" id="new-ws-modal">
     <div class="modal">
@@ -1159,6 +1202,7 @@ function showNewIglooModal() {
           ${state.templates.map(t => renderTemplateCard(t, t.id === selectedTemplateId)).join('')}
         </div>
       </div>
+      <div id="ws-vars">${renderTemplateVarForm(firstTpl)}</div>
       <div class="modal-footer">
         <button class="btn btn-ghost" onclick="document.getElementById('new-ws-modal').remove()">Cancel</button>
         <button class="btn btn-primary" style="width:auto;min-width:130px" onclick="app.createWorkspace()">Start building</button>
@@ -1547,8 +1591,19 @@ window.app = {
     const name = document.getElementById('ws-name')?.value?.trim();
     if (!name) { toast('Enter an igloo name', 'error'); return; }
     if (!selectedTemplateId) { toast('Pick a template', 'error'); return; }
+    const tpl = state.templates.find(t => t.id === selectedTemplateId);
+    if (tpl?.variables?.length) {
+      for (const v of tpl.variables) {
+        if (v.required) {
+          const el = document.querySelector(`.ws-var-field[data-var="${v.name}"]`);
+          const val = el?.type === 'checkbox' ? (el.checked ? 'true' : 'false') : el?.value?.trim();
+          if (!val) { toast(`"${v.name}" is required`, 'error'); el?.focus(); return; }
+        }
+      }
+    }
+    const vars = collectWsVars();
     try {
-      const ws = await api.workspaces.create(name, selectedTemplateId);
+      const ws = await api.workspaces.create(name, selectedTemplateId, vars);
       document.getElementById('new-ws-modal')?.remove();
       state.workspaces.unshift(ws);
       state.selectedWsId = ws.id;
@@ -1590,6 +1645,11 @@ window.app = {
     selectedTemplateId = id;
     const grid = document.getElementById('modal-templates');
     if (grid) grid.innerHTML = state.templates.map(t => renderTemplateCard(t, t.id === id)).join('');
+    const varsEl = document.getElementById('ws-vars');
+    if (varsEl) {
+      const tpl = state.templates.find(t => t.id === id);
+      varsEl.innerHTML = renderTemplateVarForm(tpl);
+    }
   },
 
   async selectTemplateView(id) {

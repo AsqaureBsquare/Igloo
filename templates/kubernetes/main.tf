@@ -2,7 +2,7 @@ terraform {
   required_providers {
     igloo = {
       source  = "AsqaureBsquare/igloo"
-      version = "~> 0.1"
+      version = "~> 0.1.2"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"

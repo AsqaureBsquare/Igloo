@@ -38,7 +38,9 @@ func New(st store.Store, a *auth.Auth) *Server {
 		Registry:    api.NewProvisionerRegistry(),
 		LogBuf:      api.NewLogBuffer(),
 		Coordinator: tailnet.NewCoordinator(),
+		NetMap:      api.NewNetMapStore(),
 	}
+	h.Relay.OnAgentMessage(h.NetMap.HandleAgentMessage)
 
 	// Wire up OIDC if configured via environment variables.
 	if issuer := os.Getenv("IGLOO_OIDC_ISSUER_URL"); issuer != "" {
@@ -121,6 +123,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Get("/api/workspaces/{id}/terminal", h.TerminalToken)
 			r.Get("/api/workspaces/{id}/logs", h.WorkspaceLogs)
 			r.Get("/api/workspaces/{id}/agent-logs", h.AgentLogs)
+			r.Get("/api/workspaces/{id}/network", h.GetNetworkMap)
 			r.Get("/api/workspaces/{id}/vscode-token", h.VScodeToken)
 			r.Get("/api/workspaces/{id}/forward-token", h.ForwardToken)
 

@@ -543,6 +543,7 @@ function renderWorkspaceDetail(ws) {
     <div class="ws-detail-actions">
       ${canConnect ? `<button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
       ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
+      ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openNetMap('${ws.id}','${esc(ws.name)}')">Network</button>` : ''}
       ${canStart   ? `<button class="btn btn-wake" style="width:auto;padding:8px 16px" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
       ${canStop    ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
       ${!isBuilding ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>` : ''}
@@ -1677,6 +1678,10 @@ window.app = {
   openTerminal(id, name) {
     const url = `/terminal.html?wsId=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`;
     window.open(url, `igloo-term-${id}`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no');
+  },
+  openNetMap(id, name) {
+    const url = `/netmap.html?wsId=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`;
+    window.open(url, `igloo-netmap-${id}`, 'width=1100,height=720,menubar=no,toolbar=no,location=no,status=no,resizable=yes');
   },
   openVSCode(id) {
     api.workspaces.vsCodeToken(id)

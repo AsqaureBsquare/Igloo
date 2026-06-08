@@ -38,9 +38,12 @@ func (c *conn) writePump() {
 // Relay keeps track of which agent and browsers are connected per workspace.
 type Relay struct {
 	mu       sync.RWMutex
-	agents   map[string]*conn                  // workspaceID → agent conn
-	browsers map[string]map[string]*conn       // workspaceID → connID → browser conn
-	subs     map[string]map[string]chan []byte  // workspaceID → subID → channel (server-side listeners)
+	agents   map[string]*conn                 // workspaceID → agent conn
+	browsers map[string]map[string]*conn      // workspaceID → connID → browser conn
+	subs     map[string]map[string]chan []byte // workspaceID → subID → channel (server-side listeners)
+
+	handlerMu     sync.RWMutex
+	agentHandlers []func(workspaceID string, msg []byte)
 }
 
 func New() *Relay {
@@ -49,6 +52,13 @@ func New() *Relay {
 		browsers: make(map[string]map[string]*conn),
 		subs:     make(map[string]map[string]chan []byte),
 	}
+}
+
+// OnAgentMessage registers a function called for every message any agent sends.
+func (r *Relay) OnAgentMessage(fn func(workspaceID string, msg []byte)) {
+	r.handlerMu.Lock()
+	r.agentHandlers = append(r.agentHandlers, fn)
+	r.handlerMu.Unlock()
 }
 
 // Subscribe returns a channel that receives all messages the agent sends for
@@ -150,7 +160,6 @@ func (r *Relay) AgentConnected(workspaceID string) bool {
 
 func (r *Relay) broadcast(workspaceID string, msg []byte) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	for _, c := range r.browsers[workspaceID] {
 		select {
 		case c.send <- msg:
@@ -163,6 +172,13 @@ func (r *Relay) broadcast(workspaceID string, msg []byte) {
 		default:
 		}
 	}
+	r.mu.RUnlock()
+
+	r.handlerMu.RLock()
+	for _, fn := range r.agentHandlers {
+		fn(workspaceID, msg)
+	}
+	r.handlerMu.RUnlock()
 }
 
 func (r *Relay) forwardToAgent(workspaceID string, msg []byte) {

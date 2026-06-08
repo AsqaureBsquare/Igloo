@@ -19,6 +19,7 @@ type Handler struct {
 	Registry    *ProvisionerRegistry // parked acquire tokens from daemon WS connections
 	LogBuf      *LogBuffer           // live provisioner log lines per workspace
 	Coordinator *tailnet.Coordinator // built-in WireGuard coordination (no Tailscale needed)
+	NetMap      *NetMapStore         // latest network snapshot per workspace (in-memory, agent-pushed)
 
 	// OIDC — nil when not configured
 	OIDC                *auth.OIDCProvider

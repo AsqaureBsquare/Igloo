@@ -10,9 +10,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -20,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -192,6 +196,18 @@ func run(serverURL, token string) error {
 			err := conn.WriteMessage(websocket.PingMessage, nil)
 			writeMu.Unlock()
 			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Network snapshot: read /proc/net/tcp every 30s and push to server.
+	go func() {
+		sendNetSnapshot(conn)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := sendNetSnapshot(conn); err != nil {
 				return
 			}
 		}
@@ -452,4 +468,118 @@ func sendMsg(conn *websocket.Conn, msg Message) {
 	writeMu.Lock()
 	defer writeMu.Unlock()
 	conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// ─── Network snapshot ─────────────────────────────────────────────────────────
+
+type netConnInfo struct {
+	LocalAddr  string `json:"local_addr"`
+	LocalPort  string `json:"local_port"`
+	RemoteAddr string `json:"remote_addr"`
+	RemotePort string `json:"remote_port"`
+	State      string `json:"state"`
+}
+
+var tcpStateNames = map[string]string{
+	"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV",
+	"04": "FIN_WAIT1", "05": "FIN_WAIT2", "06": "TIME_WAIT",
+	"07": "CLOSE", "08": "CLOSE_WAIT", "09": "LAST_ACK",
+	"0A": "LISTEN", "0B": "CLOSING",
+}
+
+func sendNetSnapshot(conn *websocket.Conn) error {
+	conns := readProcNetTCP("/proc/net/tcp")
+	conns = append(conns, readProcNetTCP("/proc/net/tcp6")...)
+	msg := struct {
+		Type        string        `json:"type"`
+		Connections []netConnInfo `json:"connections"`
+	}{Type: "net_snapshot", Connections: conns}
+	data, _ := json.Marshal(msg)
+	writeMu.Lock()
+	defer writeMu.Unlock()
+	return conn.WriteMessage(websocket.TextMessage, data)
+}
+
+func readProcNetTCP(path string) []netConnInfo {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	isV6 := strings.Contains(path, "tcp6")
+	var out []netConnInfo
+	scanner := bufio.NewScanner(f)
+	scanner.Scan() // skip header
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 4 {
+			continue
+		}
+		localParts := strings.SplitN(fields[1], ":", 2)
+		remoteParts := strings.SplitN(fields[2], ":", 2)
+		if len(localParts) != 2 || len(remoteParts) != 2 {
+			continue
+		}
+		state := strings.ToUpper(fields[3])
+		stateName, ok := tcpStateNames[state]
+		if !ok {
+			stateName = state
+		}
+		// Skip transient states that add noise
+		if stateName == "SYN_RECV" || stateName == "FIN_WAIT1" || stateName == "FIN_WAIT2" || stateName == "CLOSING" {
+			continue
+		}
+		var localIP, remoteIP string
+		if isV6 {
+			localIP = hexToIPv6(localParts[0])
+			remoteIP = hexToIPv6(remoteParts[0])
+		} else {
+			localIP = hexToIPv4(localParts[0])
+			remoteIP = hexToIPv4(remoteParts[0])
+		}
+		out = append(out, netConnInfo{
+			LocalAddr:  localIP,
+			LocalPort:  hexToPort(localParts[1]),
+			RemoteAddr: remoteIP,
+			RemotePort: hexToPort(remoteParts[1]),
+			State:      stateName,
+		})
+	}
+	return out
+}
+
+func hexToIPv4(s string) string {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 4 {
+		return s
+	}
+	return fmt.Sprintf("%d.%d.%d.%d", b[3], b[2], b[1], b[0])
+}
+
+func hexToIPv6(s string) string {
+	if len(s) != 32 {
+		return s
+	}
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return s
+	}
+	// Each 4-byte group is little-endian
+	out := make([]byte, 16)
+	for i := 0; i < 4; i++ {
+		out[i*4+0] = b[i*4+3]
+		out[i*4+1] = b[i*4+2]
+		out[i*4+2] = b[i*4+1]
+		out[i*4+3] = b[i*4+0]
+	}
+	return net.IP(out).String()
+}
+
+func hexToPort(s string) string {
+	n, err := strconv.ParseUint(s, 16, 16)
+	if err != nil {
+		return s
+	}
+	return strconv.FormatUint(n, 10)
 }

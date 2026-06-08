@@ -75,7 +75,7 @@ const api = (() => {
 })();
 
 // ─── State ────────────────────────────────────────────────────────────────────
-const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null };
+const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null, selectedWsId: null };
 
 // ─── Provision log streaming ──────────────────────────────────────────────────
 const provLog = {
@@ -442,66 +442,91 @@ function timeAgo(iso) {
   return `${Math.floor(h/24)}d ago`;
 }
 
-// ─── Igloo card ───────────────────────────────────────────────────────────────
+// ─── Workspace compact card (click to open detail panel) ─────────────────────
 function renderIglooCard(ws) {
-  const isDeleting = ws.status === 'deleting';
-  const canConnect = ws.status === 'running';
-  const canStart   = ws.status === 'sleeping' || ws.status === 'error';
-  const canStop    = ws.status === 'running'  || ws.status === 'creating';
-  const isBuilding = ws.status === 'creating';
-  const isFailed   = ws.status === 'error';
-  const showLogs   = isBuilding || isDeleting;
-
-  const isTerraform = ['docker-terraform','aws-fargate','fly','gcp-cloudrun'].includes(ws.provider);
-
+  const isSelected = state.selectedWsId === ws.id;
   const providerLabel = {
     'kubernetes': 'k8s', 'docker': 'docker', 'docker-terraform': 'docker',
     'aws-fargate': 'fargate', 'fly': 'fly.io', 'gcp-cloudrun': 'cloud run',
   }[ws.provider] || ws.provider || 'cloud';
 
+  return `
+  <div class="ws-card ws-card--${ws.status}${isSelected ? ' ws-card--selected' : ''}"
+       onclick="app.openWorkspace('${ws.id}')" data-id="${ws.id}">
+    <div class="ws-card-main">
+      <span class="ws-dot ws-dot--${ws.status}"></span>
+      <div class="ws-card-info">
+        <div class="ws-card-name">${esc(ws.name)}</div>
+        <div class="ws-card-meta">${esc(ws.template_name || 'custom')} · ${timeAgo(ws.last_active_at)}</div>
+      </div>
+      <span class="ws-pill ws-pill--${ws.status}">${ws.status}</span>
+      <span class="ws-provider-tag">${esc(providerLabel)}</span>
+    </div>
+  </div>`;
+}
+
+// ─── Workspace detail panel ───────────────────────────────────────────────────
+function renderWorkspaceDetail(ws) {
+  const canConnect  = ws.status === 'running';
+  const canStart    = ws.status === 'sleeping' || ws.status === 'error';
+  const canStop     = ws.status === 'running'  || ws.status === 'creating';
+  const isBuilding  = ws.status === 'creating';
+  const isDeleting  = ws.status === 'deleting';
+  const isFailed    = ws.status === 'error';
+  const showLogs    = isBuilding || isDeleting;
+  const isTerraform = ['docker-terraform','aws-fargate','fly','gcp-cloudrun'].includes(ws.provider);
+
+  const providerLabel = {
+    'kubernetes': 'Kubernetes', 'docker': 'Docker', 'docker-terraform': 'Docker',
+    'aws-fargate': 'AWS Fargate', 'fly': 'Fly.io', 'gcp-cloudrun': 'Cloud Run',
+  }[ws.provider] || ws.provider || 'Cloud';
+
   const costText = ws.status === 'running' && ws.cost_per_hr > 0
     ? `$${ws.cost_per_hr.toFixed(4)}/hr`
-    : ws.status === 'sleeping' ? '$0.00 frozen' : '';
-  const costClass = ws.status === 'running' ? 'tag-cost-running' : 'tag-cost-sleeping';
+    : ws.status === 'sleeping' ? '$0.00 frozen' : '—';
 
   return `
-  <div class="igloo-card igloo-card--${ws.status}" data-id="${ws.id}">
-    ${ws.status === 'running'  ? '<div class="card-scanline"></div>' : ''}
-    ${ws.status === 'creating' || ws.status === 'deleting' ? '<div class="card-progress-bar"></div>' : ''}
-
-    <div class="igloo-card-header">
-      <div class="igloo-card-header-left">
-        <span class="status-dot status-dot--${ws.status}"></span>
-        <div style="min-width:0">
-          <div class="igloo-name">${esc(ws.name)}</div>
-          <div class="igloo-meta-row">${timeAgo(ws.last_active_at)}</div>
-        </div>
+  <div class="ws-detail">
+    <div class="ws-detail-header">
+      <div class="ws-detail-header-left">
+        <span class="ws-dot ws-dot--${ws.status}"></span>
+        <span class="ws-detail-name">${esc(ws.name)}</span>
+        <span class="ws-pill ws-pill--${ws.status}">${ws.status}</span>
       </div>
-      <span class="template-badge">${esc(ws.template_name || 'custom')}</span>
+      <button class="btn-icon" onclick="app.closeWorkspace()" title="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
 
-    ${isBuilding ? buildingAnimation() : ''}
-    ${isFailed   ? errorAnimation()   : ''}
-    ${showLogs   ? renderLogPanel(ws.id) : ''}
-
-    <div class="igloo-tags">
-      <span class="tag-chip tag-provider">${esc(providerLabel)}</span>
-      ${costText ? `<span class="tag-chip ${costClass}">${esc(costText)}</span>` : ''}
+    <div class="ws-detail-meta">
+      <div class="ws-detail-row"><span class="ws-detail-label">Template</span><span>${esc(ws.template_name || 'custom')}</span></div>
+      <div class="ws-detail-row"><span class="ws-detail-label">Provider</span><span>${esc(providerLabel)}</span></div>
+      <div class="ws-detail-row"><span class="ws-detail-label">Last active</span><span>${timeAgo(ws.last_active_at)}</span></div>
+      <div class="ws-detail-row"><span class="ws-detail-label">Cost</span><span>${costText}</span></div>
     </div>
 
-    <div class="igloo-divider"></div>
-
-    <div class="igloo-actions">
-      ${canConnect ? `<button class="btn btn-ghost btn-sm" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
-      ${canConnect ? `<button class="btn btn-ghost btn-sm" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
-      ${canStart   ? `<button class="btn btn-wake btn-sm" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
-      ${canStop    ? `<button class="btn btn-ghost btn-sm" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
-      ${!showLogs  ? `<button class="btn btn-ghost btn-sm" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>` : ''}
-      <span class="actions-spacer"></span>
-      ${!isDeleting ? `<button class="btn btn-icon btn-danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
-      </button>` : ''}
+    <div class="ws-detail-actions">
+      ${canConnect ? `<button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
+      ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
+      ${canStart   ? `<button class="btn btn-wake" style="width:auto;padding:8px 16px" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
+      ${canStop    ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
+      <button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>
+      ${!isDeleting ? `<button class="btn btn-danger" style="width:auto;padding:8px 16px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy</button>` : ''}
     </div>
+
+    ${showLogs ? `
+    <div class="ws-detail-section">
+      <div class="ws-detail-section-title">${isBuilding ? 'Building…' : 'Destroying…'}</div>
+      ${buildingAnimation()}
+      ${renderLogPanel(ws.id)}
+    </div>` : ''}
+
+    ${isFailed ? `
+    <div class="ws-detail-section">
+      <div class="ws-detail-section-title">Error</div>
+      ${errorAnimation()}
+      ${renderLogPanel(ws.id)}
+    </div>` : ''}
   </div>`;
 }
 
@@ -615,7 +640,7 @@ function renderIgloosView(q) {
     ? state.workspaces.filter(w => wsMatchesQuery(w, q))
     : state.workspaces;
 
-  if (!visible.length) {
+  if (!visible.length && !state.selectedWsId) {
     el.innerHTML = state.workspaces.length
       ? `<div class="empty-state"><h2>No matches</h2><p>Try a different search query.</p></div>`
       : `<div class="empty-state">
@@ -631,7 +656,21 @@ function renderIgloosView(q) {
          </div>`;
     return;
   }
-  el.innerHTML = `<div class="igloo-grid">${visible.map(renderIglooCard).join('')}</div>`;
+
+  const selectedWs = state.selectedWsId
+    ? state.workspaces.find(w => w.id === state.selectedWsId)
+    : null;
+
+  const cardsHtml = visible.length
+    ? visible.map(renderIglooCard).join('')
+    : `<div class="text-muted" style="padding:12px 4px;font-size:13px">No matches</div>`;
+
+  el.innerHTML = `
+  <div class="ws-layout${selectedWs ? ' ws-layout--split' : ''}">
+    <div class="ws-cards-pane">${cardsHtml}</div>
+    ${selectedWs ? `<div class="ws-detail-pane" id="ws-detail-pane">${renderWorkspaceDetail(selectedWs)}</div>` : ''}
+  </div>`;
+
   provLog.sync(state.workspaces);
   state.workspaces.forEach(ws => {
     const panel = document.getElementById(`log-panel-${ws.id}`);
@@ -1552,6 +1591,16 @@ window.app = {
     if (!confirm(`Delete user "${name}"? This cannot be undone.`)) return;
     try { await api.admin.deleteUser(id); toast('User deleted'); renderUsersView(); }
     catch(e) { toast(e.message, 'error'); }
+  },
+
+  openWorkspace(id) {
+    state.selectedWsId = id;
+    renderIgloosView(document.getElementById('ws-search')?.value || '');
+  },
+
+  closeWorkspace() {
+    state.selectedWsId = null;
+    renderIgloosView(document.getElementById('ws-search')?.value || '');
   },
 
   openTerminal(id, name) { term.open(id, name); },

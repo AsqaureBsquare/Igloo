@@ -60,3 +60,25 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    name: Rollout to EKS
+    needs: build-push
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Configure kubectl
+        run: aws eks update-kubeconfig --region us-east-1 --name igloo-eks
+
+      - name: Restart server & provisioner
+        run: |
+          kubectl rollout restart deployment/igloo-server deployment/igloo-provisioner -n default
+          kubectl rollout status deployment/igloo-server deployment/igloo-provisioner -n default --timeout=5m

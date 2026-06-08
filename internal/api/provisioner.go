@@ -313,7 +313,9 @@ func (h *Handler) handleJobDone(ctx context.Context, jobID string, outputs map[s
 		}
 	}
 	if job.Action == models.JobDestroy {
-		_ = h.Store.DeleteWorkspace(ctx, job.WorkspaceID)
+		if err := h.Store.DeleteWorkspace(ctx, job.WorkspaceID); err != nil {
+			log.Printf("[provisioner-api] job %s: failed to delete workspace %s: %v", jobID, job.WorkspaceID, err)
+		}
 	}
 	log.Printf("[provisioner-api] job %s done (workspace=%s action=%s)", jobID, job.WorkspaceID, job.Action)
 }
@@ -335,10 +337,18 @@ func (h *Handler) handleJobFail(ctx context.Context, jobID, errMsg string) {
 	} else {
 		job.Status = models.JobFailed
 		log.Printf("[provisioner-api] job %s permanently failed: %s", jobID, errMsg)
-		if ws, err := h.Store.GetWorkspace(ctx, job.WorkspaceID); err == nil {
-			ws.Status = models.StatusError
-			ws.UpdatedAt = time.Now()
-			_ = h.Store.UpdateWorkspace(ctx, ws)
+		if job.Action == models.JobDestroy {
+			if err := h.Store.DeleteWorkspace(ctx, job.WorkspaceID); err != nil {
+				log.Printf("[provisioner-api] job %s: force-delete workspace %s failed: %v", jobID, job.WorkspaceID, err)
+			} else {
+				log.Printf("[provisioner-api] job %s: force-deleted workspace %s after destroy failure", jobID, job.WorkspaceID)
+			}
+		} else {
+			if ws, err := h.Store.GetWorkspace(ctx, job.WorkspaceID); err == nil {
+				ws.Status = models.StatusError
+				ws.UpdatedAt = time.Now()
+				_ = h.Store.UpdateWorkspace(ctx, ws)
+			}
 		}
 	}
 	_ = h.Store.UpdateJob(ctx, job)

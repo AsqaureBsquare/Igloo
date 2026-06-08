@@ -78,6 +78,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 
 	// ─── Public routes ────────────────────────────────────────────────────────
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.Get("/downloads/{binary}", h.DownloadAgent)
 	r.Get("/cli-auth", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		f, _ := uiFS.Open("static/cli-auth.html")
@@ -245,6 +246,7 @@ func (s *Server) SeedBuiltinTemplates(ctx context.Context) {
 			Icon:        "☸️",
 			Builtin:     true,
 			Variables: []models.TemplateVar{
+				{Name: "workspace_image", Description: "Any Docker image — agent is injected automatically at startup", Default: "ubuntu:22.04", Type: "string"},
 				{Name: "cpu", Description: "CPU request", Default: "500m", Type: "select", Options: []string{"250m", "500m", "1", "2"}},
 				{Name: "memory", Description: "Memory request", Default: "512Mi", Type: "select", Options: []string{"256Mi", "512Mi", "1Gi", "2Gi", "4Gi"}},
 				{Name: "disk", Description: "Persistent disk size", Default: "10Gi", Type: "select", Options: []string{"5Gi", "10Gi", "20Gi", "50Gi"}},

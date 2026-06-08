@@ -4,6 +4,8 @@ ARG TARGETARCH=amd64
 WORKDIR /app
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -ldflags="-s -w" -o igloo ./cmd/igloo
+# Always build agent for linux/amd64 — served to workspace pods at startup
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -mod=vendor -ldflags="-s -w" -o igloo-agent-linux-amd64 ./cmd/agent
 
 FROM alpine:3.19
 ARG TERRAFORM_VERSION=1.9.8
@@ -15,6 +17,7 @@ RUN apk add --no-cache ca-certificates tzdata unzip wget && \
     rm terraform_${TERRAFORM_VERSION}_linux_${TARGETARCH}.zip
 WORKDIR /app
 COPY --from=builder /app/igloo .
+COPY --from=builder /app/igloo-agent-linux-amd64 downloads/igloo-agent-linux-amd64
 COPY templates/ templates/
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:8080/health || exit 1

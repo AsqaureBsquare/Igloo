@@ -277,7 +277,9 @@ func (d *Daemon) buildVars(job *claimResponse, desiredCount string) map[string]s
 	vars["task_role_arn"] = os.Getenv("IGLOO_ECS_TASK_ROLE_ARN")
 	vars["subnet_ids"] = os.Getenv("IGLOO_ECS_SUBNETS")
 	vars["security_group_id"] = os.Getenv("IGLOO_ECS_SG")
-	vars["workspace_image"] = os.Getenv("IGLOO_WORKSPACE_IMAGE")
+	if vars["workspace_image"] == "" {
+		vars["workspace_image"] = os.Getenv("IGLOO_WORKSPACE_IMAGE")
+	}
 	if vars["region"] == "" {
 		if r := os.Getenv("AWS_REGION"); r != "" {
 			vars["region"] = r

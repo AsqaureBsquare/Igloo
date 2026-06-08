@@ -2,7 +2,7 @@ terraform {
   required_providers {
     igloo = {
       source  = "AsqaureBsquare/igloo"
-      version = "~> 0.1.2"
+      version = "~> 0.1.3"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
@@ -18,7 +18,7 @@ resource "igloo_agent" "main" {
   network_monitoring = false
 }
 
-variable "workspace_image" {}
+variable "workspace_image" { default = "ubuntu:22.04" }
 variable "desired_count"   { default = "1" }
 variable "cpu"             { default = "500m" }
 variable "memory"          { default = "512Mi" }
@@ -67,25 +67,9 @@ resource "kubernetes_deployment" "workspace" {
       }
       spec {
         container {
-          name              = "workspace"
-          image             = var.workspace_image
-          image_pull_policy = "Always"
-          env {
-            name  = "IGLOO_SERVER_URL"
-            value = igloo_agent.main.server_url
-          }
-          env {
-            name  = "IGLOO_AGENT_TOKEN"
-            value = igloo_agent.main.token
-          }
-          env {
-            name  = "IGLOO_WORKSPACE_ID"
-            value = igloo_agent.main.workspace_id
-          }
-          env {
-            name  = "IGLOO_NETMAP_ENABLED"
-            value = tostring(igloo_agent.main.network_monitoring)
-          }
+          name    = "workspace"
+          image   = var.workspace_image
+          command = ["sh", "-c", igloo_agent.main.init_script]
           resources {
             requests = {
               cpu    = var.cpu

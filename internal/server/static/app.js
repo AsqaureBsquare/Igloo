@@ -75,7 +75,7 @@ const api = (() => {
 })();
 
 // ─── State ────────────────────────────────────────────────────────────────────
-const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null, selectedWsId: null };
+const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null, selectedWsId: null, wsFilter: { status: null, templateId: null } };
 
 // ─── Provision log streaming ──────────────────────────────────────────────────
 const provLog = {
@@ -654,6 +654,41 @@ function renderShell() {
 }
 
 // ─── Views ────────────────────────────────────────────────────────────────────
+function renderWsFilterBar() {
+  const f = state.wsFilter;
+  const statuses = [
+    { val: null,        label: 'All' },
+    { val: 'running',   label: '● Running' },
+    { val: 'sleeping',  label: 'Sleeping' },
+    { val: 'creating',  label: 'Building' },
+    { val: 'error',     label: 'Error' },
+  ];
+  const chips = statuses.map(s =>
+    `<button class="ws-filter-chip${f.status === s.val ? ' ws-filter-chip--active' : ''}${s.val ? ' ws-filter-chip--'+s.val : ''}"
+       onclick="app.setWsFilter('status',${s.val === null ? 'null' : `'${s.val}'`})">${s.label}</button>`
+  ).join('');
+
+  const tplOptions = state.templates.map(t =>
+    `<option value="${t.id}" ${f.templateId === t.id ? 'selected' : ''}>${esc(t.name)}</option>`
+  ).join('');
+
+  const activeCount = (f.status ? 1 : 0) + (f.templateId ? 1 : 0);
+
+  return `<div class="ws-filter-bar">
+    <div class="ws-filter-section">
+      ${chips}
+    </div>
+    ${state.templates.length > 1 ? `
+    <div class="ws-filter-section">
+      <select class="ws-filter-select" onchange="app.setWsFilter('templateId',this.value||null)">
+        <option value="">All templates</option>
+        ${tplOptions}
+      </select>
+    </div>` : ''}
+    ${activeCount > 0 ? `<button class="ws-filter-clear" onclick="app.clearWsFilter()">✕ Clear filters</button>` : ''}
+  </div>`;
+}
+
 function renderIgloosView(q, opts = {}) {
   const runningCount = state.workspaces.filter(w => w.status === 'running').length;
   const titleEl = document.getElementById('view-title');
@@ -671,15 +706,18 @@ function renderIgloosView(q, opts = {}) {
   }
   document.getElementById('topbar-actions').innerHTML =
     `<div class="search-bar-wrap">
-       <input class="search-bar" id="ws-search" placeholder="Search… owner:me status:running template:k8s" value="${esc(q||'')}"
+       <input class="search-bar" id="ws-search" placeholder="Search by name, owner:me, org:acme…" value="${esc(q||'')}"
          oninput="app.searchWorkspaces(this.value)">
      </div>
      <button class="btn btn-primary" style="width:auto;padding:8px 16px" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>`;
 
   const el = document.getElementById('content');
-  const visible = q
-    ? state.workspaces.filter(w => wsMatchesQuery(w, q))
-    : state.workspaces;
+  const visible = state.workspaces.filter(w => {
+    if (q && !wsMatchesQuery(w, q)) return false;
+    if (state.wsFilter.status && w.status !== state.wsFilter.status) return false;
+    if (state.wsFilter.templateId && w.template_id !== state.wsFilter.templateId) return false;
+    return true;
+  });
 
   if (!visible.length && !state.selectedWsId) {
     el.innerHTML = state.workspaces.length
@@ -706,9 +744,14 @@ function renderIgloosView(q, opts = {}) {
     ? visible.map(renderIglooCard).join('')
     : `<div class="text-muted" style="padding:12px 4px;font-size:13px">No matches</div>`;
 
+  const filterBar = renderWsFilterBar();
+
   el.innerHTML = `
   <div class="ws-layout${selectedWs ? ' ws-layout--split' : ''}">
-    <div class="ws-cards-pane">${cardsHtml}</div>
+    <div class="ws-cards-pane">
+      ${filterBar}
+      ${cardsHtml}
+    </div>
     ${selectedWs ? `<div class="ws-detail-pane${opts.noAnim ? ' ws-detail-pane--no-anim' : ''}" id="ws-detail-pane">${renderWorkspaceDetail(selectedWs)}</div>` : ''}
   </div>`;
 
@@ -1338,6 +1381,16 @@ window.app = {
   searchWorkspaces(q) {
     clearTimeout(this._wsSearchTimer);
     this._wsSearchTimer = setTimeout(() => renderIgloosView(q), 200);
+  },
+
+  setWsFilter(key, val) {
+    state.wsFilter[key] = val;
+    renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
+  },
+
+  clearWsFilter() {
+    state.wsFilter = { status: null, templateId: null };
+    renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
   },
 
   searchTemplates(q) {

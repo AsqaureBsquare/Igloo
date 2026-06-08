@@ -1830,7 +1830,7 @@ function renderRegister() {
                onkeydown="if(event.key==='Enter')handleRegister()" />
       </div>
       <button class="btn btn-primary" onclick="handleRegister()" id="reg-btn">Create account</button>
-      <div class="auth-footer">Already have an account? <a href="#" onclick="renderLogin()">Sign in →</a></div>
+      <div class="auth-footer">Already have an account? <a href="javascript:void(0)" onclick="renderLogin()">Sign in →</a></div>
     </div>
   </div>`;
   document.getElementById('name')?.focus();
@@ -1847,6 +1847,7 @@ async function handleLogin() {
     const { token, user } = await api.auth.login(email, password);
     localStorage.setItem('igloo_token', token);
     state.user = user;
+    history.replaceState({}, '', '/');
     await boot();
   } catch(e) {
     showAuthErr(e.message);
@@ -1867,6 +1868,7 @@ async function handleRegister() {
     const { token, user } = await api.auth.register(name, email, password);
     localStorage.setItem('igloo_token', token);
     state.user = user;
+    history.replaceState({}, '', '/');
     await boot();
   } catch(e) {
     showAuthErr(e.message);
@@ -1983,7 +1985,7 @@ function renderLogin(errorMsg) {
                onkeydown="if(event.key==='Enter')handleLogin()" />
       </div>
       <button class="btn btn-primary" onclick="handleLogin()" id="login-btn">Sign in</button>
-      <div class="auth-footer">Don't have an account? <a href="#" onclick="renderRegister()">Create one →</a></div>` : '';
+      <div class="auth-footer">Don't have an account? <a href="javascript:void(0)" onclick="renderRegister()">Create one →</a></div>` : '';
     document.getElementById('root').innerHTML = `
     <div class="auth-page">
       <div class="auth-logo">

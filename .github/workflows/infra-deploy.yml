@@ -107,9 +107,8 @@ jobs:
           ALB=$(kubectl get ingress igloo-server -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
           echo "ALB address: $ALB"
 
-          ALB_ZONE=$(aws elbv2 describe-load-balancers \
-            --query "LoadBalancers[?DNSName=='${ALB}'].CanonicalHostedZoneId" \
-            --output text)
+          # us-east-1 ALB canonical hosted zone ID is a fixed AWS constant
+          ALB_ZONE="Z35SXDOTRQ7X7K"
           echo "ALB hosted zone: $ALB_ZONE"
 
           aws route53 change-resource-record-sets \

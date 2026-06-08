@@ -315,6 +315,44 @@ function buildingAnimation() {
   </div>`;
 }
 
+// ─── Melting igloo destroy animation ─────────────────────────────────────────
+function destroyingAnimation() {
+  return `<div class="igloo-anim-wrap">
+  <svg class="igloo-destroy-svg" viewBox="0 0 200 90" xmlns="http://www.w3.org/2000/svg">
+    <ellipse cx="100" cy="84" rx="85" ry="5" fill="#041220" opacity="0.5"/>
+    <!-- Melting igloo blocks (dripping) -->
+    <rect class="melt-blk melt-1" x="82" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.7"/>
+    <rect class="melt-blk melt-2" x="100" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.7"/>
+    <rect class="melt-blk melt-3" x="118" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.6"/>
+    <rect class="melt-blk melt-1" x="86"  y="51" width="15" height="11" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.6"/>
+    <rect class="melt-blk melt-2" x="103" y="51" width="15" height="11" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.5"/>
+    <rect class="melt-blk melt-3" x="91"  y="40" width="14" height="10" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.5"/>
+    <!-- Drips -->
+    <ellipse class="drip drip-1" cx="90"  cy="78" rx="2.5" ry="3.5" fill="#f59e0b" opacity="0.5"/>
+    <ellipse class="drip drip-2" cx="108" cy="76" rx="2"   ry="3"   fill="#f59e0b" opacity="0.4"/>
+    <ellipse class="drip drip-3" cx="126" cy="77" rx="2"   ry="3"   fill="#f59e0b" opacity="0.45"/>
+    <!-- Sad eskimo watching -->
+    <g>
+      <ellipse cx="36" cy="68" rx="16" ry="17" fill="#0d4a8a"/>
+      <circle cx="36" cy="46" r="13" fill="#0d4a8a"/>
+      <circle cx="36" cy="46" r="9"  fill="#e8c09a"/>
+      <path d="M26 44 Q36 36 46 44" fill="#1a6dc0" opacity="0.8"/>
+      <path d="M32 44 Q33.5 42 35 44" stroke="#1a0800" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+      <path d="M37 44 Q38.5 42 40 44" stroke="#1a0800" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+      <path d="M32 51 Q36 47 40 51" stroke="#8b4513" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+      <ellipse class="tear" cx="31" cy="53" rx="1.5" ry="2.5" fill="#00d4ff" opacity="0.7"/>
+      <rect x="16" y="62" width="14" height="7" rx="3.5" fill="#0d4a8a" transform="rotate(40 18 66)"/>
+      <rect x="48" y="62" width="14" height="7" rx="3.5" fill="#0d4a8a" transform="rotate(-40 60 66)"/>
+    </g>
+    <!-- Amber particles rising -->
+    <circle cx="95"  cy="50" r="1.2" fill="#f59e0b" opacity="0.5"><animate attributeName="cy" values="50;30;50" dur="2s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite"/></circle>
+    <circle cx="115" cy="45" r="1"   fill="#f59e0b" opacity="0.4"><animate attributeName="cy" values="45;25;45" dur="2.4s" begin="0.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.4;0;0.4" dur="2.4s" begin="0.6s" repeatCount="indefinite"/></circle>
+    <circle cx="105" cy="55" r="0.8" fill="#ef4444" opacity="0.3"><animate attributeName="cy" values="55;35;55" dur="1.8s" begin="1s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.3;0;0.3" dur="1.8s" begin="1s" repeatCount="indefinite"/></circle>
+  </svg>
+  <div style="font-size:11px;color:var(--amber);font-family:var(--mono);letter-spacing:.05em;margin-top:-4px;text-align:center">melting your igloo…</div>
+  </div>`;
+}
+
 // ─── Sad eskimo error animation ────────────────────────────────────────────────
 function errorAnimation() {
   return `<div class="igloo-anim-wrap">
@@ -468,12 +506,11 @@ function renderIglooCard(ws) {
 // ─── Workspace detail panel ───────────────────────────────────────────────────
 function renderWorkspaceDetail(ws) {
   const canConnect  = ws.status === 'running';
-  const canStart    = ws.status === 'sleeping' || ws.status === 'error';
-  const canStop     = ws.status === 'running'  || ws.status === 'creating';
+  const canStart    = ws.status === 'sleeping';
+  const canStop     = ws.status === 'running';
   const isBuilding  = ws.status === 'creating';
   const isDeleting  = ws.status === 'deleting';
   const isFailed    = ws.status === 'error';
-  const showLogs    = isBuilding || isDeleting;
   const isTerraform = ['docker-terraform','aws-fargate','fly','gcp-cloudrun'].includes(ws.provider);
 
   const providerLabel = {
@@ -481,9 +518,7 @@ function renderWorkspaceDetail(ws) {
     'aws-fargate': 'AWS Fargate', 'fly': 'Fly.io', 'gcp-cloudrun': 'Cloud Run',
   }[ws.provider] || ws.provider || 'Cloud';
 
-  const costText = ws.status === 'running' && ws.cost_per_hr > 0
-    ? `$${ws.cost_per_hr.toFixed(4)}/hr`
-    : ws.status === 'sleeping' ? '$0.00 frozen' : '—';
+  const statusLabel = { running: 'Running', sleeping: 'Sleeping', creating: 'Building', deleting: 'Destroying', error: 'Failed' }[ws.status] || ws.status;
 
   return `
   <div class="ws-detail">
@@ -491,7 +526,7 @@ function renderWorkspaceDetail(ws) {
       <div class="ws-detail-header-left">
         <span class="ws-dot ws-dot--${ws.status}"></span>
         <span class="ws-detail-name">${esc(ws.name)}</span>
-        <span class="ws-pill ws-pill--${ws.status}">${ws.status}</span>
+        <span class="ws-pill ws-pill--${ws.status}">${statusLabel}</span>
       </div>
       <button class="btn-icon" onclick="app.closeWorkspace()" title="Close">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
@@ -502,30 +537,35 @@ function renderWorkspaceDetail(ws) {
       <div class="ws-detail-row"><span class="ws-detail-label">Template</span><span>${esc(ws.template_name || 'custom')}</span></div>
       <div class="ws-detail-row"><span class="ws-detail-label">Provider</span><span>${esc(providerLabel)}</span></div>
       <div class="ws-detail-row"><span class="ws-detail-label">Last active</span><span>${timeAgo(ws.last_active_at)}</span></div>
-      <div class="ws-detail-row"><span class="ws-detail-label">Cost</span><span>${costText}</span></div>
     </div>
 
+    ${!isDeleting ? `
     <div class="ws-detail-actions">
       ${canConnect ? `<button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
       ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
       ${canStart   ? `<button class="btn btn-wake" style="width:auto;padding:8px 16px" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
       ${canStop    ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
-      <button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>
-      ${!isDeleting ? `<button class="btn btn-danger" style="width:auto;padding:8px 16px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy</button>` : ''}
-    </div>
+      ${!isBuilding ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>` : ''}
+      ${!isFailed ? `<button class="btn btn-danger" style="width:auto;padding:8px 16px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy</button>` : ''}
+    </div>` : ''}
 
-    ${showLogs ? `
+    ${isBuilding ? `
     <div class="ws-detail-section">
-      <div class="ws-detail-section-title">${isBuilding ? 'Building…' : 'Destroying…'}</div>
       ${buildingAnimation()}
+      ${renderLogPanel(ws.id)}
+    </div>` : ''}
+
+    ${isDeleting ? `
+    <div class="ws-detail-section">
+      ${destroyingAnimation()}
       ${renderLogPanel(ws.id)}
     </div>` : ''}
 
     ${isFailed ? `
     <div class="ws-detail-section">
-      <div class="ws-detail-section-title">Error</div>
       ${errorAnimation()}
       ${renderLogPanel(ws.id)}
+      <button class="btn btn-danger" style="width:auto;padding:8px 16px;margin-top:8px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy</button>
     </div>` : ''}
   </div>`;
 }
@@ -613,7 +653,7 @@ function renderShell() {
 }
 
 // ─── Views ────────────────────────────────────────────────────────────────────
-function renderIgloosView(q) {
+function renderIgloosView(q, opts = {}) {
   const runningCount = state.workspaces.filter(w => w.status === 'running').length;
   const titleEl = document.getElementById('view-title');
   titleEl.textContent = state.user?.is_admin ? 'All Igloos' : 'My Igloos';
@@ -668,7 +708,7 @@ function renderIgloosView(q) {
   el.innerHTML = `
   <div class="ws-layout${selectedWs ? ' ws-layout--split' : ''}">
     <div class="ws-cards-pane">${cardsHtml}</div>
-    ${selectedWs ? `<div class="ws-detail-pane" id="ws-detail-pane">${renderWorkspaceDetail(selectedWs)}</div>` : ''}
+    ${selectedWs ? `<div class="ws-detail-pane${opts.noAnim ? ' ws-detail-pane--no-anim' : ''}" id="ws-detail-pane">${renderWorkspaceDetail(selectedWs)}</div>` : ''}
   </div>`;
 
   provLog.sync(state.workspaces);
@@ -1426,8 +1466,9 @@ window.app = {
       const ws = await api.workspaces.create(name, selectedTemplateId);
       document.getElementById('new-ws-modal')?.remove();
       state.workspaces.unshift(ws);
+      state.selectedWsId = ws.id;
       renderIgloosView();
-      toast(`Building "${ws.name}"… your igloo is on its way`, 'success');
+      toast(`"${ws.name}" is being built`, 'success');
     } catch(e) { toast(e.message, 'error'); }
   },
 
@@ -1442,23 +1483,22 @@ window.app = {
   },
 
   async stopWorkspace(id) {
+    const ws = state.workspaces.find(w => w.id === id);
+    if (ws) { ws.status = 'sleeping'; renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true }); }
     try {
       await api.workspaces.stop(id);
-      const ws = state.workspaces.find(w => w.id === id);
-      if (ws) ws.status = 'sleeping';
-      renderIgloosView();
-      toast('Igloo frozen — $0.00/hr ❄️');
-    } catch(e) { toast(e.message, 'error'); }
+      toast('Igloo sleeping ❄️');
+    } catch(e) { toast(e.message, 'error'); await refreshWorkspaces(); }
   },
 
   async deleteWorkspace(id, name) {
     if (!confirm(`Melt "${name}"? This cannot be undone.`)) return;
+    const ws = state.workspaces.find(w => w.id === id);
+    if (ws) { ws.status = 'deleting'; renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true }); }
     try {
       await api.workspaces.del(id);
-      state.workspaces = state.workspaces.filter(w => w.id !== id);
-      renderIgloosView();
-      toast('Igloo melted');
-    } catch(e) { toast(e.message, 'error'); }
+      toast('Igloo melting…');
+    } catch(e) { toast(e.message, 'error'); await refreshWorkspaces(); }
   },
 
   selectTemplate(id) {
@@ -1772,13 +1812,23 @@ async function boot() {
   state.poll = setInterval(async () => {
     const updated = await api.workspaces.list().catch(() => null);
     if (!updated) return;
-    // Merge in-place: update existing entries (preserving order), append new ones.
+
+    // Detect meaningful changes before merging.
+    const oldMap = new Map(state.workspaces.map(w => [w.id, w.status]));
+    const changed = updated.length !== state.workspaces.length ||
+      updated.some(w => oldMap.get(w.id) !== w.status);
+
     const map = new Map(updated.map(w => [w.id, w]));
+    // If selected workspace was deleted, clear selection.
+    if (state.selectedWsId && !map.has(state.selectedWsId)) {
+      state.selectedWsId = null;
+    }
     state.workspaces = state.workspaces
-      .map(w => map.get(w.id) ?? w)           // update existing, keep order
-      .filter(w => map.has(w.id))             // remove deleted
-      .concat(updated.filter(w => !state.workspaces.find(e => e.id === w.id))); // append brand-new
-    if (state.view === 'igloos') renderIgloosView();
+      .map(w => map.get(w.id) ?? w)
+      .filter(w => map.has(w.id))
+      .concat(updated.filter(w => !state.workspaces.find(e => e.id === w.id)));
+
+    if (changed && state.view === 'igloos') renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
   }, 5000);
 }
 

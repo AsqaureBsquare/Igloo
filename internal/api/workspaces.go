@@ -30,19 +30,9 @@ func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	f := ParseWorkspaceFilter(r.URL.Query().Get("q"))
 	callerID := ctxUserID(r)
 
-	// Admins see all workspaces by default; regular users always see only their own.
-	user, _ := h.Store.GetUser(r.Context(), callerID)
-	isAdmin := user != nil && user.IsAdmin
-
+	// Always return only the current user's workspaces.
+	// Admins who need all workspaces use GET /api/admin/workspaces.
 	ownerID := callerID
-	if isAdmin {
-		// Admin: no owner filter unless they explicitly request owner:me
-		if f.Owner == "me" {
-			ownerID = callerID
-		} else {
-			ownerID = "" // all users
-		}
-	}
 
 	ws, err := h.Store.ListWorkspaces(r.Context(), ownerID, ctxOrgID(r))
 	if err != nil {
@@ -96,15 +86,23 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsID := uuid.NewString()
+	agentToken, err := h.Auth.SignConn(wsID, "agent", 30*24*time.Hour)
+	if err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
 	ws := &models.Workspace{
-		ID:           uuid.NewString(),
+		ID:           wsID,
 		OrgID:        orgID,
 		UserID:       ctxUserID(r),
 		Name:         strings.TrimSpace(body.Name),
 		TemplateID:   tmpl.ID,
 		TemplateName: tmpl.Name,
 		Provider:     tmpl.Provider,
-		Status:       models.StatusSleeping,
+		Status:       models.StatusCreating,
+		AgentToken:   agentToken,
 		Vars:         vars,
 		CreatedAt:    time.Now(),
 		UpdatedAt:    time.Now(),
@@ -115,6 +113,13 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if err := h.Store.CreateWorkspace(r.Context(), ws); err != nil {
 		h.err(w, http.StatusInternalServerError, "internal error")
 		return
+	}
+
+	// Auto-start: enqueue the provisioning job immediately.
+	if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobStart); err != nil {
+		log.Printf("[workspace] failed to enqueue start job workspace=%s: %v", ws.ID, err)
+	} else {
+		h.TryImmediateDispatch(r.Context())
 	}
 
 	h.json(w, http.StatusCreated, ws)

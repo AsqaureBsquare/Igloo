@@ -1289,18 +1289,49 @@ async function showTeamMembersModal(orgId, teamId, teamName) {
   await reload();
 }
 
+// ─── URL ↔ view mapping ───────────────────────────────────────────────────────
+const viewToPath = {
+  'igloos':           '/',
+  'templates':        '/templates',
+  'settings':         '/settings',
+  'users':            '/users',
+  'admin-workspaces': '/admin/workspaces',
+  'orgs':             '/orgs',
+  'org-detail':       '/orgs',
+};
+const pathToView = {
+  '/':                 'igloos',
+  '/igloos':           'igloos',
+  '/templates':        'templates',
+  '/settings':         'settings',
+  '/users':            'users',
+  '/admin/workspaces': 'admin-workspaces',
+  '/orgs':             'orgs',
+};
+
+function applyView(v) {
+  state.view = v;
+  renderShell();
+  if      (v === 'igloos')            renderIgloosView();
+  else if (v === 'templates')         renderTemplatesView();
+  else if (v === 'settings')          renderSettingsView();
+  else if (v === 'users')             renderUsersView();
+  else if (v === 'admin-workspaces')  renderAdminWorkspacesView();
+  else if (v === 'orgs')              renderOrgsView();
+  else if (v === 'org-detail')        renderOrgDetailView();
+}
+
+window.addEventListener('popstate', e => {
+  const v = e.state?.view || pathToView[window.location.pathname] || 'igloos';
+  applyView(v);
+});
+
 // ─── Main app object ──────────────────────────────────────────────────────────
 window.app = {
   setView(v) {
-    state.view = v;
-    renderShell();
-    if      (v === 'igloos')            renderIgloosView();
-    else if (v === 'templates')         renderTemplatesView();
-    else if (v === 'settings')          renderSettingsView();
-    else if (v === 'users')             renderUsersView();
-    else if (v === 'admin-workspaces')  renderAdminWorkspacesView();
-    else if (v === 'orgs')              renderOrgsView();
-    else if (v === 'org-detail')        renderOrgDetailView();
+    const path = viewToPath[v] || '/';
+    history.pushState({ view: v }, '', path);
+    applyView(v);
   },
 
   searchWorkspaces(q) {
@@ -1808,8 +1839,14 @@ async function boot() {
     api.templates.list().catch(() => []),
     api.workspaces.list().catch(() => []),
   ]);
+
+  // Restore view from URL on load/refresh.
+  const initView = pathToView[window.location.pathname] || 'igloos';
+  state.view = initView;
+  history.replaceState({ view: initView }, '', window.location.pathname);
+
   renderShell();
-  renderIgloosView();
+  applyView(initView);
   term.init();
   clearInterval(state.poll);
   state.poll = setInterval(async () => {

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terminal — Igloo</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; background: #020c18; overflow: hidden; font-family: 'JetBrains Mono', monospace; }
+
+    .term-chrome {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    .term-titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      height: 40px;
+      background: #030f1f;
+      border-bottom: 1px solid rgba(99,210,255,0.1);
+      flex-shrink: 0;
+    }
+
+    .term-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      color: #4a7a9b;
+      letter-spacing: 0.03em;
+    }
+
+    .term-title svg { opacity: 0.6; }
+
+    .term-name {
+      color: #c8e8ff;
+      font-weight: 600;
+    }
+
+    .term-status {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #4a7a9b;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+    .term-status.connected { background: #00ffb3; box-shadow: 0 0 5px #00ffb3; }
+
+    .term-body {
+      flex: 1;
+      min-height: 0;
+      padding: 8px 4px 4px 8px;
+    }
+
+    #xterm-container { width: 100%; height: 100%; }
+    .xterm { height: 100%; }
+    .xterm-viewport { overflow-y: auto !important; }
+  </style>
+</head>
+<body>
+<div class="term-chrome">
+  <div class="term-titlebar">
+    <div class="term-title">
+      <span class="term-status" id="term-status"></span>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <span class="term-name" id="term-name">connecting…</span>
+    </div>
+  </div>
+  <div class="term-body">
+    <div id="xterm-container"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+  const params  = new URLSearchParams(window.location.search);
+  const wsId    = params.get('wsId');
+  const wsName  = params.get('name') || 'terminal';
+  const token   = localStorage.getItem('igloo_token');
+
+  document.title = `${wsName} — Igloo Terminal`;
+  document.getElementById('term-name').textContent = wsName;
+
+  const xterm = new Terminal({
+    cursorBlink:  true,
+    scrollback:   10000,
+    fontFamily:   "'JetBrains Mono', 'Cascadia Code', monospace",
+    fontSize:     13,
+    lineHeight:   1.4,
+    theme: {
+      background: '#020c18', foreground: '#c8e8ff', cursor: '#00d4ff',
+      selectionBackground: 'rgba(0,212,255,0.2)',
+      black: '#071828', red: '#ff3d6b', green: '#00ffb3', yellow: '#ffc400',
+      blue: '#00d4ff', magenta: '#9d5cff', cyan: '#00e5cc', white: '#c8e8ff',
+      brightBlack: '#1c3550', brightRed: '#ff6b8a', brightGreen: '#33ffc1',
+      brightYellow: '#ffd54f', brightBlue: '#40e0ff', brightMagenta: '#b57bff',
+      brightCyan: '#40f0d8', brightWhite: '#e2f0ff',
+    },
+  });
+
+  const fit = new FitAddon.FitAddon();
+  xterm.loadAddon(fit);
+  xterm.open(document.getElementById('xterm-container'));
+  fit.fit();
+  window.addEventListener('resize', () => fit.fit());
+
+  const statusDot = document.getElementById('term-status');
+
+  if (!wsId || !token) {
+    xterm.writeln('\x1b[31m[error] Missing workspace ID or auth token. Please log in and try again.\x1b[0m');
+  } else {
+    xterm.writeln('\x1b[2m[igloo] connecting…\x1b[0m');
+
+    fetch(`/api/workspaces/${wsId}/terminal`, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    })
+    .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.error || 'failed'))))
+    .then(({ token: termToken, ws_url }) => {
+      const url = ws_url.replace(/^http/, 'ws') + `?token=${encodeURIComponent(termToken)}`;
+      const sock = new WebSocket(url);
+
+      xterm.onData(data => {
+        if (sock.readyState === WebSocket.OPEN)
+          sock.send(JSON.stringify({ type: 'pty_data', data: btoa(String.fromCharCode(...new TextEncoder().encode(data))) }));
+      });
+      xterm.onResize(({ cols, rows }) => {
+        if (sock.readyState === WebSocket.OPEN)
+          sock.send(JSON.stringify({ type: 'pty_resize', cols, rows }));
+      });
+
+      sock.onopen = () => sock.send(JSON.stringify({ type: 'pty_spawn', cols: xterm.cols, rows: xterm.rows }));
+      sock.onmessage = evt => {
+        let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+        if (msg.type === 'pty_output' && msg.data) {
+          try { xterm.write(Uint8Array.from(atob(msg.data), c => c.charCodeAt(0))); }
+          catch { xterm.write(msg.data); }
+        } else if (msg.type === 'pty_ready') {
+          xterm.clear();
+          xterm.focus();
+          statusDot.classList.add('connected');
+        } else if (msg.type === 'pty_exit') {
+          xterm.writeln('\r\n\x1b[2m[session ended — you may close this window]\x1b[0m');
+          statusDot.classList.remove('connected');
+        } else if (msg.type === 'pty_error') {
+          xterm.writeln(`\r\n\x1b[31m[error: ${msg.data}]\x1b[0m`);
+        }
+      };
+      sock.onclose = () => {
+        xterm.writeln('\r\n\x1b[2m[disconnected]\x1b[0m');
+        statusDot.classList.remove('connected');
+      };
+    })
+    .catch(e => xterm.writeln(`\r\n\x1b[31m[error: ${e.message}]\x1b[0m`));
+  }
+</script>
+</body>
+</html>

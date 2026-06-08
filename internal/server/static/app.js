@@ -1643,7 +1643,10 @@ window.app = {
     renderIgloosView(document.getElementById('ws-search')?.value || '');
   },
 
-  openTerminal(id, name) { term.open(id, name); },
+  openTerminal(id, name) {
+    const url = `/terminal.html?wsId=${encodeURIComponent(id)}&name=${encodeURIComponent(name)}`;
+    window.open(url, `igloo-term-${id}`, 'width=900,height=600,menubar=no,toolbar=no,location=no,status=no');
+  },
   openVSCode(id) {
     api.workspaces.vsCodeToken(id)
       .then(data => window.open(data.url, '_blank'))

@@ -201,17 +201,19 @@ func run(serverURL, token string) error {
 		}
 	}()
 
-	// Network snapshot: read /proc/net/tcp every 30s and push to server.
-	go func() {
-		sendNetSnapshot(conn)
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for range ticker.C {
-			if err := sendNetSnapshot(conn); err != nil {
-				return
+	// Network snapshot: only when IGLOO_NETMAP_ENABLED=true.
+	if os.Getenv("IGLOO_NETMAP_ENABLED") == "true" {
+		go func() {
+			sendNetSnapshot(conn)
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := sendNetSnapshot(conn); err != nil {
+					return
+				}
 			}
-		}
-	}()
+		}()
+	}
 
 	var ptmx *os.File
 

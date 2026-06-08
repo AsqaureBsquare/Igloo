@@ -14,7 +14,9 @@ terraform {
 provider "igloo" {}
 provider "kubernetes" {}
 
-resource "igloo_agent" "main" {}
+resource "igloo_agent" "main" {
+  network_monitoring = false
+}
 
 variable "workspace_image" {}
 variable "desired_count"   { default = "1" }
@@ -79,6 +81,10 @@ resource "kubernetes_deployment" "workspace" {
           env {
             name  = "IGLOO_WORKSPACE_ID"
             value = igloo_agent.main.workspace_id
+          }
+          env {
+            name  = "IGLOO_NETMAP_ENABLED"
+            value = tostring(igloo_agent.main.network_monitoring)
           }
           resources {
             requests = {

@@ -17,12 +17,8 @@ server:
   aws:
     region: us-east-1
 
-  # DynamoDB table names (match infra/ecs terraform outputs)
   dynamo:
-    usersTable:      igloo-users
-    workspacesTable: igloo-workspaces
-    templatesTable:  igloo-templates
-    jobsTable:       igloo-ws-jobs
+    table: igloo
 
   # IRSA — set via --set at deploy time (output from terraform)
   serviceAccount:

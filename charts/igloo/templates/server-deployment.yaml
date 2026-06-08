@@ -56,15 +56,8 @@ spec:
               value: {{ .Values.provisioner.workspace.image | quote }}
             - name: IGLOO_SEED_TEMPLATES
               value: "true"
-            # DynamoDB table names
-            - name: IGLOO_DYNAMO_USERS_TABLE
-              value: {{ .Values.server.dynamo.usersTable | quote }}
-            - name: IGLOO_DYNAMO_WORKSPACES_TABLE
-              value: {{ .Values.server.dynamo.workspacesTable | quote }}
-            - name: IGLOO_DYNAMO_TEMPLATES_TABLE
-              value: {{ .Values.server.dynamo.templatesTable | quote }}
-            - name: IGLOO_DYNAMO_JOBS_TABLE
-              value: {{ .Values.server.dynamo.jobsTable | quote }}
+            - name: IGLOO_DYNAMO_TABLE
+              value: {{ .Values.server.dynamo.table | quote }}
             {{- if .Values.server.database.postgresURL }}
             - name: IGLOO_DATABASE_URL
               valueFrom:

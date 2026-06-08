@@ -18,12 +18,8 @@ server:
   aws:
     region: us-east-1
 
-  # DynamoDB table names (must match what terraform created)
   dynamo:
-    usersTable:      igloo-users
-    workspacesTable: igloo-workspaces
-    templatesTable:  igloo-templates
-    jobsTable:       igloo-ws-jobs
+    table: igloo
 
   # Public URL the server is reachable at (used by workspace agents to dial home)
   serverURL: ""

@@ -65,8 +65,9 @@ resource "kubernetes_deployment" "workspace" {
       }
       spec {
         container {
-          name  = "workspace"
-          image = var.workspace_image
+          name              = "workspace"
+          image             = var.workspace_image
+          image_pull_policy = "Always"
           env {
             name  = "IGLOO_SERVER_URL"
             value = igloo_agent.main.server_url

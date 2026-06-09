@@ -266,7 +266,9 @@ func (s *Server) SeedBuiltinTemplates(ctx context.Context) {
 	}
 
 	for _, t := range templates {
-		t.CreatedAt = time.Now()
+		now := time.Now()
+		t.CreatedAt = now
+		t.UpdatedAt = now
 		if err := s.handler.Store.UpsertTemplate(ctx, t); err != nil {
 			log.Printf("[server] failed to seed template %s: %v", t.ID, err)
 		}

@@ -471,13 +471,19 @@ function costLabel(ws) {
 }
 
 function timeAgo(iso) {
-  const diff = Date.now() - new Date(iso).getTime();
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime()) || d.getFullYear() < 2000) return '';
+  const diff = Date.now() - d.getTime();
   const m = Math.floor(diff / 60000);
   if (m < 1) return 'just now';
   if (m < 60) return `${m}m ago`;
   const h = Math.floor(m / 60);
   if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h/24)}d ago`;
+  const days = Math.floor(h / 24);
+  if (days < 30) return `${days}d ago`;
+  const mo = Math.floor(days / 30);
+  return `${mo}mo ago`;
 }
 
 // ─── Workspace compact card (click to open detail panel) ─────────────────────

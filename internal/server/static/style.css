@@ -1779,11 +1779,20 @@ h1, h2, h3 { margin: 0; }
 .ws-filter-bar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,6,15,0.4);
+}
+
+.ws-filter-bar-left {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border);
+  flex: 1;
 }
 
 .ws-filter-section {

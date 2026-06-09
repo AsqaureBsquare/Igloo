@@ -774,23 +774,7 @@ function renderIgloosView(q, opts = {}) {
   const activeCount = (f.status ? 1 : 0) + (f.templateId ? 1 : 0);
 
   document.getElementById('topbar-actions').innerHTML =
-    `<div class="ws-topbar-filter">
-       <div class="search-bar-wrap">
-         <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-         <input class="search-bar search-bar--with-icon" id="ws-search" placeholder="Search workspaces…" value="${esc(q||'')}"
-           oninput="app.searchWorkspaces(this.value)" style="padding-left:32px">
-       </div>
-       <div class="ws-filter-chips-inline">
-         ${statusChips}
-         ${state.templates.length > 1 ? `
-         <select class="ws-filter-select" onchange="app.setWsFilter('templateId',this.value||null)">
-           <option value="">Template</option>
-           ${tplOptions}
-         </select>` : ''}
-         ${activeCount > 0 ? `<button class="ws-filter-clear" onclick="app.clearWsFilter()">✕ Clear</button>` : ''}
-       </div>
-     </div>
-     <button class="btn btn-primary" style="width:auto;padding:8px 18px;flex-shrink:0" onclick="app.showNewIgloo()">${icon.plus} New workspace</button>`;
+    `<button class="btn btn-primary" style="width:auto;padding:8px 18px;flex-shrink:0" onclick="app.showNewIgloo()">${icon.plus} New workspace</button>`;
 
   const el = document.getElementById('content');
   const visible = state.workspaces.filter(w => {
@@ -839,9 +823,30 @@ function renderIgloosView(q, opts = {}) {
     </table>
   </div>` : `<div class="text-muted" style="padding:24px;text-align:center;font-size:13px">No workspaces match the current filters.</div>`;
 
+  const filterBar = `
+  <div class="ws-filter-bar">
+    <div class="ws-filter-bar-left">
+      <div class="search-bar-wrap">
+        <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-bar search-bar--with-icon" id="ws-search" placeholder="Search workspaces…" value="${esc(q||'')}"
+          oninput="app.searchWorkspaces(this.value)" style="padding-left:32px">
+      </div>
+      <div class="ws-filter-chips-inline">
+        ${statusChips}
+        ${state.templates.length > 1 ? `
+        <select class="ws-filter-select" onchange="app.setWsFilter('templateId',this.value||null)">
+          <option value="">Template</option>
+          ${tplOptions}
+        </select>` : ''}
+        ${activeCount > 0 ? `<button class="ws-filter-clear" onclick="app.clearWsFilter()">✕ Clear</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+
   el.innerHTML = `
   <div class="ws-layout${selectedWs ? ' ws-layout--split' : ''}">
     <div class="ws-cards-pane">
+      ${filterBar}
       ${tableHtml}
     </div>
     ${selectedWs ? `<div class="ws-detail-pane${opts.noAnim ? ' ws-detail-pane--no-anim' : ''}" id="ws-detail-pane">${renderWorkspaceDetail(selectedWs)}</div>` : ''}

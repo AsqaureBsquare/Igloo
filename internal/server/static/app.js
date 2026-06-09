@@ -882,12 +882,7 @@ function renderTemplatesView(selectedId, q) {
   const isAdmin = state.user?.is_admin;
   document.getElementById('view-title').textContent = 'Templates';
   document.getElementById('topbar-actions').innerHTML =
-    `<div class="search-bar-wrap" style="position:relative">
-       <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-       <input class="search-bar search-bar--with-icon" id="tpl-search" placeholder="Search templates…" value="${esc(q||'')}"
-         oninput="app.searchTemplates(this.value)">
-     </div>
-     ${isAdmin ? `<button class="btn btn-primary" style="width:auto;padding:8px 18px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}`;
+    isAdmin ? `<button class="btn btn-primary" style="width:auto;padding:8px 18px;flex-shrink:0" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : '';
 
   const visible = q
     ? state.templates.filter(t => t.name.toLowerCase().includes(q.toLowerCase()) || (t.description||'').toLowerCase().includes(q.toLowerCase()))
@@ -896,12 +891,23 @@ function renderTemplatesView(selectedId, q) {
   const sel = selectedId || visible[0]?.id;
   const el = document.getElementById('content');
 
+  const filterBar = `
+  <div class="ws-filter-bar">
+    <div class="ws-filter-bar-left">
+      <div class="search-bar-wrap" style="position:relative">
+        <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-bar search-bar--with-icon" id="tpl-search" placeholder="Search templates…" value="${esc(q||'')}"
+          oninput="app.searchTemplates(this.value)" style="padding-left:32px">
+      </div>
+    </div>
+  </div>`;
+
   if (!visible.length) {
-    el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📦</div><h2>No templates${q ? ' match' : ''}</h2><p>${q ? 'Try a different search.' : 'No templates have been created yet.'}</p>${isAdmin ? `<button class="btn btn-primary" style="width:auto;margin-top:8px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}</div>`;
+    el.innerHTML = filterBar + `<div class="empty-state"><div class="empty-state-icon">📦</div><h2>No templates${q ? ' match' : ''}</h2><p>${q ? 'Try a different search.' : 'No templates have been created yet.'}</p>${isAdmin ? `<button class="btn btn-primary" style="width:auto;margin-top:8px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}</div>`;
     return;
   }
 
-  el.innerHTML = `
+  el.innerHTML = filterBar + `
   <div class="tpl-page-layout">
     <div class="tpl-table-wrap">
       <table class="tpl-table">
@@ -1197,21 +1203,34 @@ async function renderUsersView() {
 
 async function renderAdminWorkspacesView(q) {
   document.getElementById('view-title').textContent = 'All Workspaces';
-  document.getElementById('topbar-actions').innerHTML =
-    `<div class="search-bar-wrap">
-       <input class="search-bar" id="admin-ws-search" placeholder="owner:alice status:running template:kubernetes org:acme" value="${esc(q||'')}"
-         oninput="app.searchAdminWorkspaces(this.value)" style="width:320px">
-     </div>`;
+  document.getElementById('topbar-actions').innerHTML = '';
   const el = document.getElementById('content');
-  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+  el.innerHTML = `
+  <div class="ws-filter-bar">
+    <div class="ws-filter-bar-left">
+      <div class="search-bar-wrap" style="position:relative">
+        <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="search-bar search-bar--with-icon" id="admin-ws-search" placeholder="owner:alice status:running template:kubernetes org:acme" value="${esc(q||'')}"
+          oninput="app.searchAdminWorkspaces(this.value)" style="padding-left:32px;width:380px">
+      </div>
+    </div>
+  </div>
+  <div id="admin-ws-results"><div class="text-muted" style="padding:24px">Loading…</div></div>`;
+  _renderAdminWsResults(q);
+}
+
+async function _renderAdminWsResults(q) {
+  const res = document.getElementById('admin-ws-results');
+  if (!res) return;
+  res.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
   try {
     const ws = await api.admin.listWorkspaces(q || '');
     if (!ws.length) {
-      el.innerHTML = `<div class="empty-state"><h2>No workspaces${q ? ' match' : ''}</h2><p>${q ? 'Try a different query.' : 'No workspaces have been created yet.'}</p></div>`;
+      res.innerHTML = `<div class="empty-state"><h2>No workspaces${q ? ' match' : ''}</h2><p>${q ? 'Try a different query.' : 'No workspaces have been created yet.'}</p></div>`;
       return;
     }
-    el.innerHTML = `
-    <div style="max-width:1000px">
+    res.innerHTML = `
+    <div style="padding:0 20px 20px">
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px">${ws.length} workspace${ws.length!==1?'s':''} found</div>
       <table class="users-table">
         <thead><tr><th>Name</th><th>Owner</th><th>Template</th><th>Org</th><th>Status</th><th>Updated</th><th></th></tr></thead>
@@ -1236,7 +1255,7 @@ async function renderAdminWorkspacesView(q) {
       </table>
     </div>`;
   } catch(e) {
-    el.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
+    res.innerHTML = `<div class="text-muted" style="padding:24px">Failed: ${esc(e.message)}</div>`;
   }
 }
 
@@ -1716,12 +1735,23 @@ window.app = {
 
   searchTemplates(q) {
     clearTimeout(this._tplSearchTimer);
-    this._tplSearchTimer = setTimeout(() => renderTemplatesView(undefined, q), 200);
+    this._tplSearchTimer = setTimeout(() => {
+      const existing = document.getElementById('tpl-search');
+      renderTemplatesView(undefined, q);
+      if (existing) { const el = document.getElementById('tpl-search'); if (el) { el.focus(); el.setSelectionRange(q.length,q.length); } }
+    }, 200);
   },
 
   searchAdminWorkspaces(q) {
     clearTimeout(this._adminWsTimer);
-    this._adminWsTimer = setTimeout(() => renderAdminWorkspacesView(q), 300);
+    this._adminWsTimer = setTimeout(() => {
+      const existing = document.getElementById('admin-ws-results');
+      if (existing) {
+        _renderAdminWsResults(q);
+      } else {
+        renderAdminWorkspacesView(q);
+      }
+    }, 300);
   },
 
   async adminStartWs(id) {

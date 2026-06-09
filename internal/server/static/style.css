@@ -165,19 +165,20 @@ body::before {
   z-index: 0;
   pointer-events: none;
   background-image:
-    radial-gradient(ellipse 70% 50% at 15% 10%, rgba(0,100,255,0.18) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 45% at 85% 85%, rgba(0,200,180,0.12) 0%, transparent 60%),
-    radial-gradient(ellipse 55% 65% at 50% 45%, rgba(80,0,200,0.08) 0%, transparent 65%);
-  animation: aurora 20s ease-in-out infinite;
+    radial-gradient(ellipse 65% 55% at 10% 8%,  rgba(0,130,255,0.28) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 80%,  rgba(0,220,180,0.22) 0%, transparent 55%),
+    radial-gradient(ellipse 45% 60% at 55% 50%,  rgba(100,0,220,0.14) 0%, transparent 60%),
+    radial-gradient(ellipse 35% 30% at 30% 85%,  rgba(0,180,255,0.12) 0%, transparent 50%);
+  animation: aurora 22s ease-in-out infinite;
 }
 body::after {
   content: '';
   position: fixed; inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-image: radial-gradient(circle, rgba(99,210,255,0.06) 1px, transparent 1px);
-  background-size: 24px 24px;
-  opacity: 0.6;
+  background-image: radial-gradient(circle, rgba(99,210,255,0.07) 1px, transparent 1px);
+  background-size: 28px 28px;
+  opacity: 0.5;
 }
 
 /* ─── Scrollbar ──────────────────────────────────────────────────────────────── */
@@ -198,9 +199,8 @@ body::after {
 .sidebar {
   width: var(--sidebar);
   min-width: var(--sidebar);
-  background: rgba(0,6,15,0.8);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  background: #010c1e;
+  border-right: 1px solid rgba(0,212,255,0.1);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -208,13 +208,13 @@ body::after {
   z-index: 10;
 }
 
-/* Gradient right border */
+/* Top fade accent */
 .sidebar::after {
   content: '';
   position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 1px;
-  background: linear-gradient(to bottom, transparent 0%, rgba(99,210,255,0.4) 30%, rgba(0,212,255,0.6) 50%, rgba(99,210,255,0.4) 70%, transparent 100%);
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0,212,255,0.4), transparent);
   pointer-events: none;
 }
 
@@ -384,14 +384,14 @@ h1, h2, h3 { margin: 0; }
 .topbar {
   padding: 0 28px;
   height: 58px;
-  border-bottom: 1px solid rgba(99,210,255,0.08);
+  border-bottom: 1px solid rgba(99,210,255,0.1);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  background: rgba(0,6,15,0.6);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  background: rgba(1,12,28,0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   gap: 16px;
 }
 
@@ -1851,7 +1851,8 @@ h1, h2, h3 { margin: 0; }
   color: var(--red);
   cursor: pointer;
   transition: all 120ms;
-  margin-left: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .ws-filter-clear:hover { background: rgba(239,68,68,0.08); }
 

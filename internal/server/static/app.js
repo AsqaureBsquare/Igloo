@@ -75,7 +75,31 @@ const api = (() => {
 })();
 
 // ─── State ────────────────────────────────────────────────────────────────────
-const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null, selectedWsId: null, wsFilter: { status: null, templateId: null } };
+const state = { user: null, workspaces: [], templates: [], orgs: [], view: 'igloos', poll: null, currentOrg: null, activeOrgID: null, selectedWsId: null, wsFilter: { status: null, templateId: null }, latency: null, userSettingsTab: 'account' };
+
+// ─── Latency polling ──────────────────────────────────────────────────────────
+function startLatencyPolling() {
+  function measure() {
+    const t = Date.now();
+    fetch('/health', { cache: 'no-store' })
+      .then(() => {
+        state.latency = Date.now() - t;
+        const el = document.getElementById('latency-chip');
+        if (el) {
+          const color = state.latency < 100 ? 'var(--green)' : state.latency < 300 ? 'var(--amber)' : 'var(--red)';
+          el.style.color = color;
+          el.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${color};box-shadow:0 0 5px ${color};flex-shrink:0"></span>${state.latency}ms`;
+        }
+      })
+      .catch(() => {
+        state.latency = null;
+        const el = document.getElementById('latency-chip');
+        if (el) el.innerHTML = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);flex-shrink:0"></span>--`;
+      });
+  }
+  measure();
+  setInterval(measure, 10000);
+}
 
 // ─── Provision log streaming ──────────────────────────────────────────────────
 const provLog = {
@@ -486,7 +510,7 @@ function timeAgo(iso) {
   return `${mo}mo ago`;
 }
 
-// ─── Workspace compact card (click to open detail panel) ─────────────────────
+// ─── Workspace table row (click to open detail panel) ────────────────────────
 function renderIglooCard(ws) {
   const isSelected = state.selectedWsId === ws.id;
   const providerLabel = {
@@ -494,19 +518,44 @@ function renderIglooCard(ws) {
     'aws-fargate': 'fargate', 'fly': 'fly.io', 'gcp-cloudrun': 'cloud run',
   }[ws.provider] || ws.provider || 'cloud';
 
+  const statusLabels = { running: 'Active', sleeping: 'Frozen', creating: 'Building', error: 'Failed', deleting: 'Destroying' };
+
   return `
-  <div class="ws-card ws-card--${ws.status}${isSelected ? ' ws-card--selected' : ''}"
-       onclick="app.openWorkspace('${ws.id}')" data-id="${ws.id}">
-    <div class="ws-card-main">
-      <span class="ws-dot ws-dot--${ws.status}"></span>
-      <div class="ws-card-info">
-        <div class="ws-card-name">${esc(ws.name)}</div>
-        <div class="ws-card-meta">${esc(ws.template_name || 'custom')} · ${timeAgo(ws.last_active_at)}</div>
+  <tr class="ws-table-row ws-table-row--${ws.status}${isSelected ? ' ws-table-row--selected' : ''}"
+      onclick="app.openWorkspace('${ws.id}')" data-id="${ws.id}">
+    <td class="ws-table-td ws-table-td--name">
+      <div class="ws-table-name-cell">
+        <span class="ws-dot ws-dot--${ws.status}"></span>
+        <span class="ws-table-name">${esc(ws.name)}</span>
       </div>
-      <span class="ws-pill ws-pill--${ws.status}">${ws.status}</span>
-      <span class="ws-provider-tag">${esc(providerLabel)}</span>
-    </div>
-  </div>`;
+    </td>
+    <td class="ws-table-td ws-table-td--template">
+      <span class="ws-table-template">${esc(ws.template_name || 'custom')}</span>
+      <span class="ws-provider-tag" style="margin-left:6px">${esc(providerLabel)}</span>
+    </td>
+    <td class="ws-table-td ws-table-td--status">
+      <span class="ws-pill ws-pill--${ws.status}">${statusLabels[ws.status] || ws.status}</span>
+    </td>
+    <td class="ws-table-td ws-table-td--time">
+      <span class="ws-table-time">${timeAgo(ws.last_active_at) || '—'}</span>
+    </td>
+    <td class="ws-table-td ws-table-td--actions" onclick="event.stopPropagation()">
+      <div class="ws-table-actions">
+        ${ws.status === 'running' ? `<button class="btn-table-action" title="Terminal" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        </button>` : ''}
+        ${ws.status === 'sleeping' ? `<button class="btn-table-action btn-table-action--wake" title="Wake" onclick="app.startWorkspace('${ws.id}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        </button>` : ''}
+        ${ws.status === 'running' ? `<button class="btn-table-action" title="Sleep" onclick="app.stopWorkspace('${ws.id}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </button>` : ''}
+        <button class="btn-table-action btn-table-action--danger" title="Destroy" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+        </button>
+      </div>
+    </td>
+  </tr>`;
 }
 
 // ─── Workspace detail panel ───────────────────────────────────────────────────
@@ -591,6 +640,9 @@ function renderTemplateCard(t, selected) {
 function renderShell() {
   const u = state.user;
   const initials = u ? (u.name || u.email).slice(0,2).toUpperCase() : '??';
+  const latencyColor = state.latency == null ? 'var(--muted)' : state.latency < 100 ? 'var(--green)' : state.latency < 300 ? 'var(--amber)' : 'var(--red)';
+  const latencyDot = state.latency == null ? 'var(--muted)' : latencyColor;
+  const latencyLabel = state.latency == null ? '--' : `${state.latency}ms`;
 
   document.getElementById('root').innerHTML = `
   <div class="app">
@@ -630,7 +682,7 @@ function renderShell() {
           ${icon.igloo} All Workspaces
         </button>` : ''}
         <span class="nav-section-label">Account</span>
-        <button class="nav-item ${state.view==='settings'?'active':''}" onclick="app.setView('settings')">
+        <button class="nav-item ${state.view==='userSettings'?'active':''}" onclick="app.setView('userSettings')">
           ${icon.settings} Settings
         </button>
       </nav>
@@ -652,7 +704,35 @@ function renderShell() {
         <div style="display:flex;align-items:center;gap:0;flex-shrink:0">
           <h1 id="view-title" style="font-family:var(--font);font-size:17px;font-weight:700;letter-spacing:-0.3px;color:var(--text)">My Igloos</h1>
         </div>
-        <div id="topbar-actions"></div>
+        <div style="flex:1"></div>
+        <div id="topbar-actions" style="display:flex;align-items:center;gap:10px"></div>
+        <div class="topbar-right-cluster">
+          <div id="latency-chip" class="latency-chip" style="color:${latencyColor}">
+            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${latencyDot};box-shadow:0 0 5px ${latencyDot};flex-shrink:0"></span>${latencyLabel}
+          </div>
+          <div class="user-menu-wrap" id="user-menu-wrap">
+            <button class="user-menu-btn" onclick="app.toggleUserMenu()" id="user-menu-btn">
+              <div class="user-menu-avatar">${initials}</div>
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="user-dropdown" id="user-dropdown">
+              <div class="user-dropdown-header">
+                <div class="user-dropdown-name">${esc(u?.name || u?.email || '')}</div>
+                <div class="user-dropdown-email">${esc(u?.email || '')}</div>
+              </div>
+              <div class="user-dropdown-divider"></div>
+              <button class="user-dropdown-item" onclick="app.toggleUserMenu();app.setView('userSettings')">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                Account settings
+              </button>
+              <div class="user-dropdown-divider"></div>
+              <button class="user-dropdown-item user-dropdown-item--danger" onclick="app.logout()">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                Sign out
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="content" id="content"></div>
     </div>
@@ -660,41 +740,6 @@ function renderShell() {
 }
 
 // ─── Views ────────────────────────────────────────────────────────────────────
-function renderWsFilterBar() {
-  const f = state.wsFilter;
-  const statuses = [
-    { val: null,        label: 'All' },
-    { val: 'running',   label: '● Running' },
-    { val: 'sleeping',  label: 'Sleeping' },
-    { val: 'creating',  label: 'Building' },
-    { val: 'error',     label: 'Error' },
-  ];
-  const chips = statuses.map(s =>
-    `<button class="ws-filter-chip${f.status === s.val ? ' ws-filter-chip--active' : ''}${s.val ? ' ws-filter-chip--'+s.val : ''}"
-       onclick="app.setWsFilter('status',${s.val === null ? 'null' : `'${s.val}'`})">${s.label}</button>`
-  ).join('');
-
-  const tplOptions = state.templates.map(t =>
-    `<option value="${t.id}" ${f.templateId === t.id ? 'selected' : ''}>${esc(t.name)}</option>`
-  ).join('');
-
-  const activeCount = (f.status ? 1 : 0) + (f.templateId ? 1 : 0);
-
-  return `<div class="ws-filter-bar">
-    <div class="ws-filter-section">
-      ${chips}
-    </div>
-    ${state.templates.length > 1 ? `
-    <div class="ws-filter-section">
-      <select class="ws-filter-select" onchange="app.setWsFilter('templateId',this.value||null)">
-        <option value="">All templates</option>
-        ${tplOptions}
-      </select>
-    </div>` : ''}
-    ${activeCount > 0 ? `<button class="ws-filter-clear" onclick="app.clearWsFilter()">✕ Clear filters</button>` : ''}
-  </div>`;
-}
-
 function renderIgloosView(q, opts = {}) {
   const runningCount = state.workspaces.filter(w => w.status === 'running').length;
   const titleEl = document.getElementById('view-title');
@@ -710,12 +755,42 @@ function renderIgloosView(q, opts = {}) {
     badge.style.marginLeft = '12px';
     titleEl.parentNode.insertBefore(badge, titleEl.nextSibling);
   }
+
+  const f = state.wsFilter;
+  const statuses = [
+    { val: null,        label: 'All' },
+    { val: 'running',   label: 'Running' },
+    { val: 'sleeping',  label: 'Frozen' },
+    { val: 'creating',  label: 'Building' },
+    { val: 'error',     label: 'Error' },
+  ];
+  const statusChips = statuses.map(s =>
+    `<button class="ws-filter-chip${f.status === s.val ? ' ws-filter-chip--active' : ''}${s.val ? ' ws-filter-chip--'+s.val : ''}"
+       onclick="app.setWsFilter('status',${s.val === null ? 'null' : `'${s.val}'`})">${s.label}</button>`
+  ).join('');
+  const tplOptions = state.templates.map(t =>
+    `<option value="${t.id}" ${f.templateId === t.id ? 'selected' : ''}>${esc(t.name)}</option>`
+  ).join('');
+  const activeCount = (f.status ? 1 : 0) + (f.templateId ? 1 : 0);
+
   document.getElementById('topbar-actions').innerHTML =
-    `<div class="search-bar-wrap">
-       <input class="search-bar" id="ws-search" placeholder="Search by name, owner:me, org:acme…" value="${esc(q||'')}"
-         oninput="app.searchWorkspaces(this.value)">
+    `<div class="ws-topbar-filter">
+       <div class="search-bar-wrap">
+         <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+         <input class="search-bar search-bar--with-icon" id="ws-search" placeholder="Search workspaces…" value="${esc(q||'')}"
+           oninput="app.searchWorkspaces(this.value)" style="padding-left:32px">
+       </div>
+       <div class="ws-filter-chips-inline">
+         ${statusChips}
+         ${state.templates.length > 1 ? `
+         <select class="ws-filter-select" onchange="app.setWsFilter('templateId',this.value||null)">
+           <option value="">Template</option>
+           ${tplOptions}
+         </select>` : ''}
+         ${activeCount > 0 ? `<button class="ws-filter-clear" onclick="app.clearWsFilter()">✕ Clear</button>` : ''}
+       </div>
      </div>
-     <button class="btn btn-primary" style="width:auto;padding:8px 16px" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>`;
+     <button class="btn btn-primary" style="width:auto;padding:8px 18px;flex-shrink:0" onclick="app.showNewIgloo()">${icon.plus} New workspace</button>`;
 
   const el = document.getElementById('content');
   const visible = state.workspaces.filter(w => {
@@ -727,7 +802,7 @@ function renderIgloosView(q, opts = {}) {
 
   if (!visible.length && !state.selectedWsId) {
     el.innerHTML = state.workspaces.length
-      ? `<div class="empty-state"><h2>No matches</h2><p>Try a different search query.</p></div>`
+      ? `<div class="empty-state"><div class="empty-state-icon">🔍</div><h2>No matches</h2><p>Try a different search or clear the filters.</p></div>`
       : `<div class="empty-state">
            <svg class="empty-igloo" viewBox="0 0 100 60" fill="none" xmlns="http://www.w3.org/2000/svg">
              <path d="M10 42 Q10 8 50 8 Q90 8 90 42" stroke="white" stroke-width="3" stroke-linecap="round"/>
@@ -746,17 +821,28 @@ function renderIgloosView(q, opts = {}) {
     ? state.workspaces.find(w => w.id === state.selectedWsId)
     : null;
 
-  const cardsHtml = visible.length
-    ? visible.map(renderIglooCard).join('')
-    : `<div class="text-muted" style="padding:12px 4px;font-size:13px">No matches</div>`;
-
-  const filterBar = renderWsFilterBar();
+  const tableHtml = visible.length ? `
+  <div class="ws-table-wrap">
+    <table class="ws-table">
+      <thead>
+        <tr>
+          <th class="ws-table-th">Name</th>
+          <th class="ws-table-th">Template</th>
+          <th class="ws-table-th">Status</th>
+          <th class="ws-table-th">Last active</th>
+          <th class="ws-table-th ws-table-th--actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        ${visible.map(renderIglooCard).join('')}
+      </tbody>
+    </table>
+  </div>` : `<div class="text-muted" style="padding:24px;text-align:center;font-size:13px">No workspaces match the current filters.</div>`;
 
   el.innerHTML = `
   <div class="ws-layout${selectedWs ? ' ws-layout--split' : ''}">
     <div class="ws-cards-pane">
-      ${filterBar}
-      ${cardsHtml}
+      ${tableHtml}
     </div>
     ${selectedWs ? `<div class="ws-detail-pane${opts.noAnim ? ' ws-detail-pane--no-anim' : ''}" id="ws-detail-pane">${renderWorkspaceDetail(selectedWs)}</div>` : ''}
   </div>`;
@@ -791,11 +877,12 @@ function renderTemplatesView(selectedId, q) {
   const isAdmin = state.user?.is_admin;
   document.getElementById('view-title').textContent = 'Templates';
   document.getElementById('topbar-actions').innerHTML =
-    `<div class="search-bar-wrap">
-       <input class="search-bar" id="tpl-search" placeholder="Search templates…" value="${esc(q||'')}"
+    `<div class="search-bar-wrap" style="position:relative">
+       <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+       <input class="search-bar search-bar--with-icon" id="tpl-search" placeholder="Search templates…" value="${esc(q||'')}"
          oninput="app.searchTemplates(this.value)">
      </div>
-     ${isAdmin ? `<button class="btn btn-primary" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}`;
+     ${isAdmin ? `<button class="btn btn-primary" style="width:auto;padding:8px 18px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}`;
 
   const visible = q
     ? state.templates.filter(t => t.name.toLowerCase().includes(q.toLowerCase()) || (t.description||'').toLowerCase().includes(q.toLowerCase()))
@@ -803,43 +890,218 @@ function renderTemplatesView(selectedId, q) {
 
   const sel = selectedId || visible[0]?.id;
   const el = document.getElementById('content');
+
+  if (!visible.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-state-icon">📦</div><h2>No templates${q ? ' match' : ''}</h2><p>${q ? 'Try a different search.' : 'No templates have been created yet.'}</p>${isAdmin ? `<button class="btn btn-primary" style="width:auto;margin-top:8px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}</div>`;
+    return;
+  }
+
   el.innerHTML = `
-  <div class="templates-layout">
-    <div class="templates-list">
-      ${visible.map(t => `
-      <div class="tpl-list-item${t.id === sel ? ' selected' : ''}" onclick="app.selectTemplateView('${t.id}')">
-        <span class="template-icon" style="font-size:1.2em">${t.icon || '📦'}</span>
-        <div style="flex:1;min-width:0">
-          <div class="template-name">${esc(t.name)}</div>
-          <div class="template-desc">${esc(t.description)}</div>
-          <div class="template-version">v${t.version || 1}${t.updated_at ? ` · ${timeAgo(t.updated_at)}` : ''}</div>
-        </div>
-        ${isAdmin ? `<button class="btn btn-ghost btn-sm" style="flex-shrink:0" onclick="event.stopPropagation();app.editTemplate('${t.id}')">Edit</button>` : ''}
-      </div>`).join('')}
+  <div class="tpl-page-layout">
+    <div class="tpl-table-wrap">
+      <table class="tpl-table">
+        <thead>
+          <tr>
+            <th class="tpl-table-th">Template</th>
+            <th class="tpl-table-th">Description</th>
+            <th class="tpl-table-th">Version</th>
+            <th class="tpl-table-th">Updated</th>
+            ${isAdmin ? `<th class="tpl-table-th tpl-table-th--actions"></th>` : ''}
+          </tr>
+        </thead>
+        <tbody>
+          ${visible.map(t => `
+          <tr class="tpl-table-row${t.id === sel ? ' tpl-table-row--selected' : ''}" onclick="app.selectTemplateView('${t.id}')">
+            <td class="tpl-table-td tpl-table-td--name">
+              <div class="tpl-table-name-cell">
+                <span class="tpl-table-icon">${t.icon || '📦'}</span>
+                <div>
+                  <div class="tpl-table-name">${esc(t.name)}</div>
+                  ${t.builtin ? '<span class="builtin-tag" style="position:static;display:inline;margin-top:3px;font-size:9px">built-in</span>' : ''}
+                </div>
+              </div>
+            </td>
+            <td class="tpl-table-td tpl-table-td--desc">${esc(t.description || '—')}</td>
+            <td class="tpl-table-td tpl-table-td--version"><span class="tpl-version-chip">v${t.version || 1}</span></td>
+            <td class="tpl-table-td tpl-table-td--updated" style="font-family:var(--mono);font-size:11px;color:var(--muted)">${timeAgo(t.updated_at) || '—'}</td>
+            ${isAdmin ? `<td class="tpl-table-td tpl-table-td--actions" onclick="event.stopPropagation()">
+              <div class="tpl-table-actions">
+                <button class="btn btn-ghost btn-sm" onclick="app.editTemplate('${t.id}')">Edit</button>
+              </div>
+            </td>` : ''}
+          </tr>`).join('')}
+        </tbody>
+      </table>
     </div>
     <div class="templates-code" id="tpl-code">
-      <div class="tpl-code-loading">Select a template to view its Terraform source</div>
+      <div class="tpl-code-loading">Select a template to view its source</div>
     </div>
   </div>`;
   if (sel) app.selectTemplateView(sel);
 }
 
 function renderSettingsView() {
+  // Legacy redirect to new user settings
+  renderUserSettings('account');
+}
+
+function renderUserSettings(tab) {
+  tab = tab || state.userSettingsTab || 'account';
+  state.userSettingsTab = tab;
   document.getElementById('view-title').textContent = 'Settings';
   document.getElementById('topbar-actions').innerHTML = '';
+
+  const tabs = [
+    { id: 'account',       label: 'Account',       icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>` },
+    { id: 'security',      label: 'Security',      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>` },
+    { id: 'ssh-keys',      label: 'SSH Keys',      icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="15" r="5"/><path d="M13 15h8"/><path d="M17 12v6"/><path d="M21 12v6"/></svg>` },
+    { id: 'tokens',        label: 'Tokens',        icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>` },
+    { id: 'notifications', label: 'Notifications', icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>` },
+  ];
+
+  function sidebarItems() {
+    return tabs.map(t => `
+    <button class="usettings-nav-item${t.id === tab ? ' active' : ''}" onclick="app.setUserSettingsTab('${t.id}')">
+      ${t.icon} ${t.label}
+    </button>`).join('');
+  }
+
+  function tabContent() {
+    if (tab === 'account') return `
+    <div class="usettings-section">
+      <div class="usettings-section-title">Account</div>
+      <div class="usettings-section-desc">Manage your personal information and display preferences.</div>
+      <div class="usettings-form">
+        <div class="field">
+          <label>Display name</label>
+          <input type="text" value="${esc(state.user?.name || '')}" readonly style="opacity:0.6" />
+          <div class="field-hint">Contact your admin to change your display name.</div>
+        </div>
+        <div class="field">
+          <label>Email address</label>
+          <input type="email" value="${esc(state.user?.email || '')}" readonly style="opacity:0.6" />
+        </div>
+      </div>
+      <div class="usettings-section-divider"></div>
+      <div class="usettings-section-title" style="margin-top:8px">Your groups</div>
+      <div class="usettings-section-desc">Groups you belong to across organizations.</div>
+      <div class="usettings-coming-soon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="color:var(--muted)"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Group membership will appear here once configured via OIDC or admin assignment.</span>
+      </div>
+    </div>`;
+
+    if (tab === 'security') return `
+    <div class="usettings-section">
+      <div class="usettings-section-title">Password</div>
+      <div class="usettings-coming-soon usettings-coming-soon--info" style="margin-bottom:16px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--accent);flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Password changes are managed through your SSO provider. Contact your administrator for access changes.</span>
+      </div>
+      <div class="field" style="opacity:0.4;pointer-events:none">
+        <label>Current password</label>
+        <input type="password" placeholder="••••••••" disabled />
+      </div>
+      <div class="field" style="opacity:0.4;pointer-events:none">
+        <label>New password</label>
+        <input type="password" placeholder="••••••••" disabled />
+      </div>
+      <button class="btn btn-ghost" disabled style="width:auto;opacity:0.4;cursor:not-allowed">Update password</button>
+      <div class="usettings-section-divider"></div>
+      <div class="usettings-section-title" style="margin-top:8px">Single Sign-On</div>
+      <div class="usettings-coming-soon usettings-coming-soon--success">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--green);flex-shrink:0"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        <span>SSO is enabled for your organization. You can sign in with your identity provider.</span>
+      </div>
+    </div>`;
+
+    if (tab === 'ssh-keys') {
+      // Generate a placeholder public key display
+      const fakePubKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG4fP... igloo@workspace';
+      return `
+    <div class="usettings-section">
+      <div class="usettings-section-title">SSH Keys</div>
+      <div class="usettings-section-desc">Your workspace SSH public key. Add this to services that need SSH access from your workspaces.</div>
+      <div class="usettings-ssh-key-block">
+        <div class="usettings-ssh-key-label">Public key</div>
+        <div class="usettings-ssh-key-value" id="ssh-pub-key">${esc(fakePubKey)}</div>
+        <button class="btn btn-ghost btn-sm" onclick="app.copySSHKey()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+      </div>
+      <div class="usettings-coming-soon" style="margin-top:16px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="color:var(--muted);flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Per-workspace key management and authorized_keys injection coming soon.</span>
+      </div>
+    </div>`;
+    }
+
+    if (tab === 'tokens') return `
+    <div class="usettings-section">
+      <div class="usettings-section-title-row">
+        <div>
+          <div class="usettings-section-title">API Tokens</div>
+          <div class="usettings-section-desc">Personal access tokens for CLI and API access.</div>
+        </div>
+        <button class="btn btn-ghost btn-sm" disabled title="Coming soon" style="opacity:0.5;cursor:not-allowed">
+          ${icon.plus} Add token
+        </button>
+      </div>
+      <div class="usettings-coming-soon" style="margin-top:20px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="color:var(--muted)"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+        <span>Token management is coming soon. For now, use the session token from your browser's local storage.</span>
+      </div>
+      <div style="margin-top:12px;padding:14px;background:rgba(0,0,0,0.2);border:1px solid var(--border);border-radius:var(--radius-sm)">
+        <div style="font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;font-family:var(--font)">Current session token</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);word-break:break-all;line-height:1.6">${esc((localStorage.getItem('igloo_token')||'').slice(0,48)+'…')}</div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px" onclick="app.copySessionToken()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy full token
+        </button>
+      </div>
+    </div>`;
+
+    if (tab === 'notifications') return `
+    <div class="usettings-section">
+      <div class="usettings-section-title">Notifications</div>
+      <div class="usettings-section-desc">Control which workspace events trigger notifications.</div>
+      <div class="usettings-notif-group">
+        <div class="usettings-notif-group-label">Workspace events</div>
+        ${[
+          ['workspace-started', 'Workspace started', 'When a workspace finishes building or waking'],
+          ['workspace-stopped', 'Workspace stopped', 'When a workspace goes to sleep'],
+          ['workspace-failed',  'Build failed',      'When a workspace fails to start'],
+          ['workspace-deleted', 'Workspace destroyed', 'When a workspace is permanently deleted'],
+        ].map(([id, label, hint]) => `
+        <div class="usettings-notif-row">
+          <div>
+            <div class="usettings-notif-label">${label}</div>
+            <div class="usettings-notif-hint">${hint}</div>
+          </div>
+          <label class="toggle-label" style="opacity:0.5;pointer-events:none">
+            <input type="checkbox" disabled />
+            <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          </label>
+        </div>`).join('')}
+      </div>
+      <div class="usettings-coming-soon" style="margin-top:16px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" style="color:var(--muted);flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Notification delivery (email, Slack, webhooks) is coming in a future release.</span>
+      </div>
+    </div>`;
+
+    return '';
+  }
+
   document.getElementById('content').innerHTML = `
-  <div style="max-width:540px;display:flex;flex-direction:column;gap:14px">
-    <div class="settings-card">
-      <div class="settings-card-title">Account</div>
-      <div class="field"><label>Name</label>
-        <input type="text" value="${esc(state.user?.name)}" readonly style="opacity:0.6" />
-      </div>
-      <div class="field" style="margin:0"><label>Email</label>
-        <input type="text" value="${esc(state.user?.email)}" readonly style="opacity:0.6" />
-      </div>
-    </div>
-    <div>
-      <button class="btn btn-ghost" onclick="app.logout()">Sign out</button>
+  <div class="usettings-layout">
+    <aside class="usettings-sidebar">
+      <div class="usettings-sidebar-label">User settings</div>
+      ${sidebarItems()}
+    </aside>
+    <div class="usettings-content">
+      ${tabContent()}
     </div>
   </div>`;
 }
@@ -1390,6 +1652,7 @@ const viewToPath = {
   'igloos':           '/',
   'templates':        '/templates',
   'settings':         '/settings',
+  'userSettings':     '/settings',
   'users':            '/users',
   'admin-workspaces': '/admin/workspaces',
   'orgs':             '/orgs',
@@ -1399,7 +1662,7 @@ const pathToView = {
   '/':                 'igloos',
   '/igloos':           'igloos',
   '/templates':        'templates',
-  '/settings':         'settings',
+  '/settings':         'userSettings',
   '/users':            'users',
   '/admin/workspaces': 'admin-workspaces',
   '/orgs':             'orgs',
@@ -1410,7 +1673,8 @@ function applyView(v) {
   renderShell();
   if      (v === 'igloos')            renderIgloosView();
   else if (v === 'templates')         renderTemplatesView();
-  else if (v === 'settings')          renderSettingsView();
+  else if (v === 'settings')          renderUserSettings();
+  else if (v === 'userSettings')      renderUserSettings();
   else if (v === 'users')             renderUsersView();
   else if (v === 'admin-workspaces')  renderAdminWorkspacesView();
   else if (v === 'orgs')              renderOrgsView();
@@ -1661,8 +1925,11 @@ window.app = {
   },
 
   async selectTemplateView(id) {
-    document.querySelectorAll('.tpl-list-item').forEach(el => {
-      el.classList.toggle('selected', el.getAttribute('onclick')?.includes(`'${id}'`));
+    // Support both old list items and new table rows
+    document.querySelectorAll('.tpl-list-item, .tpl-table-row').forEach(el => {
+      const match = el.getAttribute('onclick')?.includes(`'${id}'`);
+      el.classList.toggle('selected', match);
+      el.classList.toggle('tpl-table-row--selected', match && el.classList.contains('tpl-table-row'));
     });
     const codeEl = document.getElementById('tpl-code');
     if (!codeEl) return;
@@ -1869,6 +2136,43 @@ window.app = {
     clearInterval(state.poll);
     renderLogin();
   },
+
+  toggleUserMenu() {
+    const dropdown = document.getElementById('user-dropdown');
+    if (!dropdown) return;
+    const isOpen = dropdown.classList.contains('open');
+    if (isOpen) {
+      dropdown.classList.remove('open');
+    } else {
+      dropdown.classList.add('open');
+      // Close on outside click
+      setTimeout(() => {
+        const handler = (e) => {
+          if (!document.getElementById('user-menu-wrap')?.contains(e.target)) {
+            dropdown.classList.remove('open');
+            document.removeEventListener('click', handler);
+          }
+        };
+        document.addEventListener('click', handler);
+      }, 10);
+    }
+  },
+
+  setUserSettingsTab(tab) {
+    state.userSettingsTab = tab;
+    renderUserSettings(tab);
+  },
+
+  copySSHKey() {
+    const el = document.getElementById('ssh-pub-key');
+    if (!el) return;
+    navigator.clipboard.writeText(el.textContent).then(() => toast('SSH key copied', 'success')).catch(() => toast('Copy failed', 'error'));
+  },
+
+  copySessionToken() {
+    const tok = localStorage.getItem('igloo_token') || '';
+    navigator.clipboard.writeText(tok).then(() => toast('Token copied', 'success')).catch(() => toast('Copy failed', 'error'));
+  },
 };
 
 // ─── Auth pages ───────────────────────────────────────────────────────────────
@@ -1976,6 +2280,7 @@ async function boot() {
   renderShell();
   applyView(initView);
   term.init();
+  startLatencyPolling();
   clearInterval(state.poll);
   state.poll = setInterval(async () => {
     const updated = await api.workspaces.list().catch(() => null);

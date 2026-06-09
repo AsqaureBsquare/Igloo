@@ -177,6 +177,7 @@ type PlatformConfig struct {
 // TemplateVar defines a user-configurable input shown in the UI at workspace creation time.
 type TemplateVar struct {
 	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name,omitempty"`
 	Description string   `json:"description"`
 	Default     string   `json:"default,omitempty"`
 	Required    bool     `json:"required"`
@@ -184,4 +185,5 @@ type TemplateVar struct {
 	Options     []string `json:"options,omitempty"` // for type=select
 	Min         string   `json:"min,omitempty"`     // for type=number
 	Max         string   `json:"max,omitempty"`     // for type=number
+	Mutable     bool     `json:"mutable,omitempty"` // whether changeable after creation
 }

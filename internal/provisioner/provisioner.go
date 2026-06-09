@@ -86,13 +86,18 @@ func Run(ctx context.Context, in Input, action Action) (map[string]string, error
 	run := func(args ...string) error {
 		cmd := exec.CommandContext(ctx, "terraform", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
+		env := append(os.Environ(),
 			"TF_IN_AUTOMATION=1",
 			"TF_INPUT=false",
 			"IGLOO_AGENT_TOKEN="+in.Vars["agent_token"],
 			"IGLOO_SERVER_URL="+in.Vars["server_url"],
 			"IGLOO_WORKSPACE_ID="+in.Vars["workspace_id"],
 		)
+		// Expose every user-supplied var as IGLOO_PARAMETER_<NAME> so igloo_parameter resources can read them.
+		for k, v := range in.Vars {
+			env = append(env, "IGLOO_PARAMETER_"+strings.ToUpper(strings.ReplaceAll(k, "-", "_"))+"="+v)
+		}
+		cmd.Env = env
 		logLine(fmt.Sprintf("[provisioner] terraform %s", strings.Join(args, " ")))
 
 		if in.LogFunc != nil {

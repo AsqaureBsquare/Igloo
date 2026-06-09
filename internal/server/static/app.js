@@ -1144,7 +1144,9 @@ function renderTemplateVarForm(tpl) {
   if (!tpl || !tpl.variables || !tpl.variables.length) return '';
   const fields = tpl.variables.map(v => {
     const id = `ws-var-${v.name}`;
-    const label = `<label for="${id}" style="display:flex;align-items:center;gap:6px">${esc(v.name)}${v.required ? '<span style="color:var(--accent)">*</span>' : ''}</label>`;
+    const labelText = v.display_name || v.name;
+    const immutableBadge = v.mutable === false ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--border);color:var(--muted);font-weight:500">immutable</span>` : '';
+    const label = `<label for="${id}" style="display:flex;align-items:center;gap:6px">${esc(labelText)}${v.required ? '<span style="color:var(--accent)">*</span>' : ''}${immutableBadge}</label>`;
     const hint = v.description ? `<div class="field-hint">${esc(v.description)}</div>` : '';
     let input;
     if (v.type === 'select' && v.options?.length) {

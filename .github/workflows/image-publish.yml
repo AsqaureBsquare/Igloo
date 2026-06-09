@@ -8,6 +8,8 @@ on:
 jobs:
   build-push:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       contents: read
       packages: write
@@ -66,6 +68,8 @@ jobs:
     needs: build-push
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     permissions:
       id-token: write
       contents: read

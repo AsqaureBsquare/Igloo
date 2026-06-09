@@ -51,6 +51,19 @@ module "eks" {
   # Grants the Terraform caller admin access so it can manage add-ons
   enable_cluster_creator_admin_permissions = true
 
+  # Explicit access entry so image-publish CI (same role) can kubectl rollout restart
+  access_entries = {
+    github_actions = {
+      principal_arn = "arn:aws:iam::601804669600:role/igloo-github-actions"
+      policy_associations = {
+        admin = {
+          policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          access_scope = { type = "cluster" }
+        }
+      }
+    }
+  }
+
   # ── Bootstrap node group ──────────────────────────────────────────────────
   # Runs: kube-system, karpenter, aws-load-balancer-controller, coredns
   # t3.medium: 2 vCPU, 4 GiB — 17 max pods per node, enough for all system pods

@@ -949,13 +949,15 @@ h1, h2, h3 { margin: 0; }
 }
 
 .empty-state-icon {
-  width: 96px; height: 96px;
-  border-radius: 24px;
-  background: rgba(255,255,255,0.025);
-  border: 1px solid var(--border);
+  width: 88px; height: 88px;
+  border-radius: 22px;
+  background: rgba(0,212,255,0.04);
+  border: 1px solid rgba(0,212,255,0.12);
   display: flex; align-items: center; justify-content: center;
-  font-size: 40px;
+  font-size: 38px;
   margin-bottom: 8px;
+  color: var(--accent);
+  box-shadow: 0 0 32px rgba(0,212,255,0.06);
 }
 
 .empty-igloo {
@@ -2343,3 +2345,227 @@ h1, h2, h3 { margin: 0; }
   color: var(--muted);
   line-height: 1.5;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   UI-UX PRO MAX LAYER — OLED Dark · Micro-interactions · Real-Time
+   Recommendations: Dark Mode (OLED) + Micro-interactions + Monitoring
+   ══════════════════════════════════════════════════════════════════ */
+
+/* ─── Accessibility: reduced motion ─────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Keyboard focus ring ────────────────────────────────────────── */
+:focus-visible {
+  outline: 2px solid rgba(0,212,255,0.75);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+button:focus:not(:focus-visible),
+a:focus:not(:focus-visible) { outline: none; }
+
+/* ─── Running status: concentric ring ───────────────────────────── */
+@keyframes ring-expand {
+  0%   { transform: scale(1);   opacity: 0.8; }
+  100% { transform: scale(2.8); opacity: 0; }
+}
+
+.ws-dot { position: relative; }
+.ws-dot--running::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--green);
+  animation: ring-expand 2.2s ease-out infinite;
+  pointer-events: none;
+}
+
+/* ─── btn-primary: gradient shimmer ──────────────────────────────── */
+.btn-primary {
+  background: linear-gradient(110deg, #009fd6 0%, #00c4f0 42%, #00d4ff 55%, #00c4f0 100%) !important;
+  background-size: 220% !important;
+  color: #001a26 !important;
+  font-weight: 700 !important;
+  transition: background-position 0.5s ease, box-shadow 0.2s, transform 0.15s !important;
+}
+.btn-primary:hover {
+  background-position: right center !important;
+  box-shadow: 0 0 32px rgba(0,212,255,0.52), 0 6px 22px rgba(0,0,0,0.55) !important;
+  transform: translateY(-1.5px) !important;
+}
+.btn-primary:active {
+  transform: translateY(0) !important;
+  transition-duration: 0.06s !important;
+  box-shadow: 0 0 14px rgba(0,212,255,0.3) !important;
+}
+.btn-primary:disabled {
+  background: rgba(0,212,255,0.1) !important;
+  color: rgba(226,240,255,0.35) !important;
+  animation: none !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* ─── Active nav: inner glow ─────────────────────────────────────── */
+.nav-item.active {
+  box-shadow: inset 0 0 28px rgba(0,212,255,0.07);
+}
+
+/* ─── Running workspace row: green tint ─────────────────────────── */
+.ws-table-row--running { border-left-color: rgba(0,255,179,0.6) !important; }
+.ws-table-row--running:hover { background: rgba(0,255,179,0.022) !important; }
+.ws-table-row--running .ws-table-name { color: #edfff6; }
+
+/* ─── Selected row: full name brightness ─────────────────────────── */
+.ws-table-row--selected .ws-table-name,
+.tpl-table-row--selected .tpl-table-name { color: #fff; }
+
+/* ─── Table action buttons: micro pop ───────────────────────────── */
+.btn-table-action { transition: all 100ms !important; }
+.btn-table-action:hover { transform: scale(1.1); }
+.btn-table-action--wake:hover {
+  box-shadow: 0 0 10px rgba(0,255,179,0.25) !important;
+}
+
+/* ─── Wake button: glow ──────────────────────────────────────────── */
+.btn-wake:hover {
+  box-shadow: 0 0 24px rgba(0,255,179,0.3), 0 2px 10px rgba(0,0,0,0.35) !important;
+}
+
+/* ─── Running badge: ambient glow ────────────────────────────────── */
+.running-badge {
+  box-shadow: 0 0 16px rgba(0,255,179,0.22);
+}
+
+/* ─── Filter chip active: glow ring ─────────────────────────────── */
+.ws-filter-chip--active {
+  box-shadow: 0 0 12px rgba(0,212,255,0.2), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+.ws-filter-chip--running.ws-filter-chip--active {
+  box-shadow: 0 0 12px rgba(0,255,179,0.2), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+.ws-filter-chip--error.ws-filter-chip--active {
+  box-shadow: 0 0 12px rgba(239,68,68,0.2), inset 0 1px 0 rgba(255,255,255,0.07);
+}
+
+/* ─── Input / search focus: deeper glow ─────────────────────────── */
+.field input:focus,
+.field textarea:focus,
+.field select:focus,
+.search-bar:focus {
+  box-shadow: 0 0 0 3px rgba(0,212,255,0.14), 0 0 18px rgba(0,212,255,0.08) !important;
+}
+
+/* ─── Auth card: depth layers ────────────────────────────────────── */
+.auth-card {
+  box-shadow:
+    0 40px 100px rgba(0,0,0,0.78),
+    0 0 56px rgba(0,212,255,0.05),
+    0 0 0 1px rgba(0,212,255,0.09),
+    inset 0 1px 0 rgba(255,255,255,0.07) !important;
+}
+
+/* ─── Modal: depth + blur ─────────────────────────────────────────── */
+.modal-overlay { background: rgba(0,2,8,0.84) !important; }
+.modal {
+  box-shadow:
+    0 48px 140px rgba(0,0,0,0.82),
+    0 0 0 1px rgba(0,212,255,0.08),
+    inset 0 1px 0 rgba(255,255,255,0.05) !important;
+}
+
+/* ─── Templates page height with filter bar ─────────────────────── */
+.tpl-page-layout { height: calc(100vh - 182px) !important; }
+
+/* ─── Code block: breathing room ────────────────────────────────── */
+.tf-code {
+  line-height: 1.8 !important;
+  color: #cce5ff !important;
+  letter-spacing: 0.01em;
+}
+
+/* ─── Missing cursor: pointer ────────────────────────────────────── */
+.template-card,
+.org-list-card,
+.tpl-table-row { cursor: pointer; }
+
+/* ─── Toast: semantic background tint ───────────────────────────── */
+.toast.success {
+  background: rgba(0,22,14,0.97) !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.65), 0 0 20px rgba(0,255,179,0.07) !important;
+}
+.toast.error {
+  background: rgba(22,0,0,0.97) !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.65), 0 0 20px rgba(239,68,68,0.07) !important;
+}
+
+/* ─── Sidebar logo: interactive polish ───────────────────────────── */
+.sidebar-logo-icon {
+  cursor: pointer;
+  transition: background 200ms, box-shadow 200ms;
+}
+.sidebar-logo-icon:hover {
+  background: rgba(0,212,255,0.14) !important;
+  box-shadow: 0 0 22px rgba(0,212,255,0.22);
+  animation: none;
+}
+
+/* ─── Detail panel meta rows: subtle hover ───────────────────────── */
+.ws-detail-row { transition: background 150ms; cursor: default; }
+.ws-detail-row:hover { background: rgba(255,255,255,0.04); }
+
+/* ─── Workspace filter chips: inline spacing ─────────────────────── */
+.ws-filter-chips-inline { gap: 6px; }
+
+/* ─── Org list card: glow on hover ──────────────────────────────── */
+.org-list-card:hover {
+  box-shadow: 0 0 24px rgba(0,212,255,0.07) !important;
+}
+
+/* ─── Scrollbar thumb: better hover ─────────────────────────────── */
+::-webkit-scrollbar-thumb:hover { background: rgba(0,212,255,0.45) !important; }
+
+/* ─── User settings nav active ───────────────────────────────────── */
+.usettings-nav-item.active {
+  box-shadow: inset 0 0 16px rgba(0,212,255,0.05);
+}
+
+/* ─── Log panel: readability ─────────────────────────────────────── */
+.log-panel { scrollbar-width: thin; scrollbar-color: rgba(0,212,255,0.2) transparent; }
+.log-line { line-height: 1.55; }
+
+/* ─── Template version chip: mono pop ────────────────────────────── */
+.tpl-version-chip {
+  background: rgba(0,212,255,0.06) !important;
+  border-color: rgba(0,212,255,0.15) !important;
+  color: rgba(0,212,255,0.7) !important;
+}
+
+/* ─── ws-provider-tag: cleaner ───────────────────────────────────── */
+.ws-provider-tag {
+  background: rgba(61,158,255,0.06);
+  border: 1px solid rgba(61,158,255,0.12);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+/* ─── Content pane: slightly more air ────────────────────────────── */
+.ws-detail { gap: 20px; }
+
+/* ─── Workspace table: sticky header ─────────────────────────────── */
+.ws-table-th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(0,6,15,0.92) !important;
+  backdrop-filter: blur(8px);
+}
+
+/* ─── Admin ws search: proper width ─────────────────────────────── */
+#admin-ws-search { min-width: 280px; }

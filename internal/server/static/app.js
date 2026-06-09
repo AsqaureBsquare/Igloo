@@ -490,7 +490,7 @@ function costLabel(ws) {
   if (ws.status === 'running' && ws.cost_per_hr > 0)
     return `<span class="cost-badge" style="color:var(--teal)">$${ws.cost_per_hr.toFixed(4)}/hr</span>`;
   if (ws.status === 'sleeping')
-    return `<span class="cost-badge" style="color:var(--muted)">$0.00/hr ❄️</span>`;
+    return `<span class="cost-badge" style="color:var(--muted);display:inline-flex;align-items:center;gap:3px">$0.00/hr <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" opacity="0.6"><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M17 7l-5 5-5-5M7 17l5-5 5 5"/></svg></span>`;
   return '';
 }
 
@@ -786,7 +786,7 @@ function renderIgloosView(q, opts = {}) {
 
   if (!visible.length && !state.selectedWsId) {
     el.innerHTML = state.workspaces.length
-      ? `<div class="empty-state"><div class="empty-state-icon">🔍</div><h2>No matches</h2><p>Try a different search or clear the filters.</p></div>`
+      ? `<div class="empty-state"><div class="empty-state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div><h2>No matches</h2><p>Try a different search or clear the filters.</p></div>`
       : `<div class="empty-state">
            <svg class="empty-igloo" viewBox="0 0 100 60" fill="none" xmlns="http://www.w3.org/2000/svg">
              <path d="M10 42 Q10 8 50 8 Q90 8 90 42" stroke="white" stroke-width="3" stroke-linecap="round"/>
@@ -903,7 +903,7 @@ function renderTemplatesView(selectedId, q) {
   </div>`;
 
   if (!visible.length) {
-    el.innerHTML = filterBar + `<div class="empty-state"><div class="empty-state-icon">📦</div><h2>No templates${q ? ' match' : ''}</h2><p>${q ? 'Try a different search.' : 'No templates have been created yet.'}</p>${isAdmin ? `<button class="btn btn-primary" style="width:auto;margin-top:8px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}</div>`;
+    el.innerHTML = filterBar + `<div class="empty-state"><div class="empty-state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg></div><h2>No templates${q ? ' match' : ''}</h2><p>${q ? 'Try a different search.' : 'No templates have been created yet.'}</p>${isAdmin ? `<button class="btn btn-primary" style="width:auto;margin-top:8px" onclick="app.showNewTemplate()">${icon.plus} New template</button>` : ''}</div>`;
     return;
   }
 

@@ -36,16 +36,23 @@ jobs:
         working-directory: infra/aws
         run: |
           terraform init
-          # Remove stale cluster_creator from state (no longer in config)
+          # Remove stale access entries from state (avoids drift errors)
           terraform state rm 'module.eks.aws_eks_access_entry.this["cluster_creator"]' 2>/dev/null || true
-          # Delete any pre-existing AWS access entry for this principal so Terraform owns it cleanly
+          terraform state rm 'module.eks.aws_eks_access_entry.this["github_actions"]' 2>/dev/null || true
+          # Delete from AWS so Terraform owns it cleanly (uses only EKS API, not K8s API)
           aws eks delete-access-entry \
             --cluster-name igloo-eks \
             --principal-arn arn:aws:iam::601804669600:role/igloo-github-actions 2>/dev/null || true
-          # Also evict github_actions from state if it was previously tracked
-          terraform state rm 'module.eks.aws_eks_access_entry.this["github_actions"]' 2>/dev/null || true
 
-      - name: Terraform apply
+      - name: Terraform apply stage 1 — restore K8s access entry
+        working-directory: infra/aws
+        run: |
+          # Create access entry first (EKS/AWS API only — no K8s auth needed yet)
+          terraform apply -auto-approve \
+            -target='module.eks.aws_eks_access_entry.this["github_actions"]' \
+            -target='module.eks.aws_eks_access_policy_association.this["github_actions_admin"]'
+
+      - name: Terraform apply stage 2 — full apply
         id: tf
         working-directory: infra/aws
         run: |

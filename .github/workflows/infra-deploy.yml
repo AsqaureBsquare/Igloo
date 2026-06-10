@@ -36,9 +36,11 @@ jobs:
         working-directory: infra/aws
         run: |
           terraform init
-          # Import access entry if it exists in AWS but not in state (409 guard)
+          # Evict stale cluster_creator entry if it's tracked in state (no longer managed)
+          terraform state rm 'module.eks.aws_eks_access_entry.this["cluster_creator"]' 2>/dev/null || true
+          # Import github_actions entry if it exists in AWS but not in state (409 guard)
           terraform import \
-            'module.eks.aws_eks_access_entry.this["cluster_creator"]' \
+            'module.eks.aws_eks_access_entry.this["github_actions"]' \
             'igloo-eks,arn:aws:iam::601804669600:role/igloo-github-actions' 2>/dev/null || true
 
       - name: Terraform apply

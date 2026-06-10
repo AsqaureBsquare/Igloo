@@ -32,11 +32,19 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Terraform init + apply
-        id: tf
+      - name: Terraform init + import existing resources
         working-directory: infra/aws
         run: |
           terraform init
+          # Import access entry if it exists in AWS but not in state (409 guard)
+          terraform import \
+            'module.eks.aws_eks_access_entry.this["cluster_creator"]' \
+            'igloo-eks,arn:aws:iam::601804669600:role/igloo-github-actions' 2>/dev/null || true
+
+      - name: Terraform apply
+        id: tf
+        working-directory: infra/aws
+        run: |
           terraform apply -auto-approve
           echo "cluster_name=$(terraform output -raw cluster_name)" >> $GITHUB_OUTPUT
           echo "server_irsa_arn=$(terraform output -raw server_irsa_role_arn)" >> $GITHUB_OUTPUT

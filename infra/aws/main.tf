@@ -48,21 +48,8 @@ module "eks" {
   cluster_endpoint_public_access  = true
   cluster_endpoint_private_access = true
 
-  # Grants the Terraform caller admin access so it can manage add-ons
+  # Grants the Terraform caller (igloo-github-actions) cluster admin — manages add-ons and kubectl
   enable_cluster_creator_admin_permissions = true
-
-  # Explicit access entry so image-publish CI (same role) can kubectl rollout restart
-  access_entries = {
-    github_actions = {
-      principal_arn = "arn:aws:iam::601804669600:role/igloo-github-actions"
-      policy_associations = {
-        admin = {
-          policy_arn   = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-          access_scope = { type = "cluster" }
-        }
-      }
-    }
-  }
 
   # ── Bootstrap node group ──────────────────────────────────────────────────
   # Runs: kube-system, karpenter, aws-load-balancer-controller, coredns

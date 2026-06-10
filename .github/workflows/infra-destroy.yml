@@ -1,0 +1,49 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DESTROY to confirm (case-sensitive)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    name: Terraform Destroy
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DESTROY'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Helm uninstall (clean K8s resources first)
+        continue-on-error: true
+        run: |
+          aws eks update-kubeconfig --region us-east-1 --name igloo-eks 2>/dev/null || exit 0
+          curl -fsSL https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz | tar xz -C /tmp
+          /tmp/linux-amd64/helm uninstall igloo --namespace default --wait --timeout 5m || true
+          kubectl delete namespace workspaces --wait=true --timeout=5m || true
+
+      - name: Terraform init
+        working-directory: infra/aws
+        run: terraform init
+
+      - name: Terraform destroy
+        working-directory: infra/aws
+        run: terraform destroy -auto-approve

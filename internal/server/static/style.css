@@ -1504,7 +1504,7 @@ h1, h2, h3 { margin: 0; }
   background: linear-gradient(90deg, rgba(0,212,255,0.15) 0%, rgba(0,212,255,0.05) 50%, transparent 100%);
   pointer-events: none;
 }
-.topbar { position: relative; }
+.topbar { position: relative; z-index: 100; }
 
 /* ─── Sleeping card frost shimmer ───────────────────────────────────────────── */
 .igloo-card--sleeping::after {
@@ -1561,7 +1561,7 @@ h1, h2, h3 { margin: 0; }
 /* ─── Workspace two-pane layout ──────────────────────────────────────────────── */
 @keyframes fadeSlideRight {
   from { opacity: 0; transform: translateX(14px); }
-  to   { opacity: 1; transform: translateX(0); }
+  to   { opacity: 1; transform: none; }
 }
 
 .ws-layout {
@@ -2083,7 +2083,7 @@ h1, h2, h3 { margin: 0; }
   padding: 6px;
   box-shadow: 0 16px 48px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,212,255,0.04);
   backdrop-filter: blur(24px);
-  z-index: 200;
+  z-index: 9999;
   display: none;
   animation: fadeSlideUp 0.15s ease-out both;
 }

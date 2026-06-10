@@ -32,16 +32,18 @@ jobs:
         with:
           terraform_wrapper: false
 
-      - name: Terraform init + import existing resources
+      - name: Terraform init + reconcile access entries
         working-directory: infra/aws
         run: |
           terraform init
-          # Evict stale cluster_creator entry if it's tracked in state (no longer managed)
+          # Remove stale cluster_creator from state (no longer in config)
           terraform state rm 'module.eks.aws_eks_access_entry.this["cluster_creator"]' 2>/dev/null || true
-          # Import github_actions entry if it exists in AWS but not in state (409 guard)
-          terraform import \
-            'module.eks.aws_eks_access_entry.this["github_actions"]' \
-            'igloo-eks,arn:aws:iam::601804669600:role/igloo-github-actions' 2>/dev/null || true
+          # Delete any pre-existing AWS access entry for this principal so Terraform owns it cleanly
+          aws eks delete-access-entry \
+            --cluster-name igloo-eks \
+            --principal-arn arn:aws:iam::601804669600:role/igloo-github-actions 2>/dev/null || true
+          # Also evict github_actions from state if it was previously tracked
+          terraform state rm 'module.eks.aws_eks_access_entry.this["github_actions"]' 2>/dev/null || true
 
       - name: Terraform apply
         id: tf

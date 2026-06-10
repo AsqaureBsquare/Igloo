@@ -2169,7 +2169,7 @@ window.app = {
     localStorage.removeItem('igloo_token');
     state.user = null;
     clearInterval(state.poll);
-    renderLogin();
+    location.reload();
   },
 
   toggleUserMenu() {
@@ -2180,12 +2180,11 @@ window.app = {
       dropdown.classList.remove('open');
     } else {
       dropdown.classList.add('open');
-      // Close on outside click
       setTimeout(() => {
         const handler = (e) => {
+          document.removeEventListener('click', handler);
           if (!document.getElementById('user-menu-wrap')?.contains(e.target)) {
             dropdown.classList.remove('open');
-            document.removeEventListener('click', handler);
           }
         };
         document.addEventListener('click', handler);

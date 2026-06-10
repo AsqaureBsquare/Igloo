@@ -740,6 +740,25 @@ function renderShell() {
 }
 
 // ─── Views ────────────────────────────────────────────────────────────────────
+function renderSkeletonForView(v) {
+  const el = document.getElementById('content');
+  if (!el) return;
+  const titleEl = document.getElementById('view-title');
+  if (titleEl) {
+    if (v === 'templates')    titleEl.textContent = 'Templates';
+    else                       titleEl.textContent = 'My Igloos';
+  }
+  const cardSkel = `
+    <div class="skeleton-card">
+      <div class="skeleton skeleton-line skeleton-line--title"></div>
+      <div class="skeleton skeleton-line skeleton-line--meta"></div>
+      <div style="flex:1"></div>
+      <div class="skeleton skeleton-line skeleton-line--body"></div>
+      <div class="skeleton skeleton-line skeleton-line--short"></div>
+    </div>`;
+  el.innerHTML = `<div class="skeleton-grid">${cardSkel.repeat(6)}</div>`;
+}
+
 function renderIgloosView(q, opts = {}) {
   const runningCount = state.workspaces.filter(w => w.status === 'running').length;
   const titleEl = document.getElementById('view-title');
@@ -1921,31 +1940,61 @@ window.app = {
 
   async startWorkspace(id) {
     const ws = state.workspaces.find(w => w.id === id);
-    if (ws) { ws.status = 'creating'; renderIgloosView(); }
+    if (!ws || ws._pending) return;
+    const prevStatus = ws.status;
+    ws._pending = 'starting';
+    ws.status = 'creating';
+    renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
     try {
       await api.workspaces.start(id);
-      await refreshWorkspaces();
       toast('Igloo waking up…', 'success');
-    } catch(e) { toast(e.message, 'error'); await refreshWorkspaces(); }
+      await refreshWorkspaces();
+    } catch(e) {
+      ws.status = prevStatus;
+      toast(e.message, 'error');
+      renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
+    } finally {
+      delete ws._pending;
+    }
   },
 
   async stopWorkspace(id) {
     const ws = state.workspaces.find(w => w.id === id);
-    if (ws) { ws.status = 'sleeping'; renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true }); }
+    if (!ws || ws._pending) return;
+    const prevStatus = ws.status;
+    ws._pending = 'stopping';
+    ws.status = 'sleeping';
+    renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
     try {
       await api.workspaces.stop(id);
-      toast('Igloo sleeping ❄️');
-    } catch(e) { toast(e.message, 'error'); await refreshWorkspaces(); }
+      toast('Igloo sleeping');
+    } catch(e) {
+      ws.status = prevStatus;
+      toast(e.message, 'error');
+      renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
+    } finally {
+      delete ws._pending;
+    }
   },
 
   async deleteWorkspace(id, name) {
     if (!confirm(`Melt "${name}"? This cannot be undone.`)) return;
     const ws = state.workspaces.find(w => w.id === id);
-    if (ws) { ws.status = 'deleting'; renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true }); }
+    if (!ws || ws._pending) return;
+    const prevStatus = ws.status;
+    ws._pending = 'deleting';
+    ws.status = 'deleting';
+    renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
     try {
       await api.workspaces.del(id);
       toast('Igloo melting…');
-    } catch(e) { toast(e.message, 'error'); await refreshWorkspaces(); }
+    } catch(e) {
+      ws.status = prevStatus;
+      toast(e.message, 'error');
+      renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
+    } finally {
+      delete ws._pending;
+    }
   },
 
   selectTemplate(id) {
@@ -2207,6 +2256,142 @@ window.app = {
     const tok = localStorage.getItem('igloo_token') || '';
     navigator.clipboard.writeText(tok).then(() => toast('Token copied', 'success')).catch(() => toast('Copy failed', 'error'));
   },
+
+  // ─── Command palette ────────────────────────────────────────────────────
+  openPalette() {
+    if (!state.user) return;
+    if (document.getElementById('cmdk-overlay')) return;
+    const isAdmin = !!state.user?.is_admin;
+    const overlay = document.createElement('div');
+    overlay.id = 'cmdk-overlay';
+    overlay.className = 'cmdk-overlay';
+    overlay.innerHTML = `
+      <div class="cmdk-panel" role="dialog" aria-label="Command palette">
+        <div class="cmdk-input-row">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input id="cmdk-input" type="text" placeholder="Search workspaces, templates, actions…" autocomplete="off" spellcheck="false" />
+          <kbd class="cmdk-esc">ESC</kbd>
+        </div>
+        <div id="cmdk-results" class="cmdk-results"></div>
+        <div class="cmdk-footer">
+          <span><kbd>↑↓</kbd> navigate</span>
+          <span><kbd>↵</kbd> select</span>
+          <span><kbd>ESC</kbd> close</span>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) this.closePalette(); });
+
+    this._paletteIndex = 0;
+    this._paletteFilter = '';
+    this._buildPaletteCommands(isAdmin);
+    this._renderPaletteResults();
+
+    const input = document.getElementById('cmdk-input');
+    input.focus();
+    input.addEventListener('input', (e) => {
+      this._paletteFilter = e.target.value;
+      this._paletteIndex = 0;
+      this._renderPaletteResults();
+    });
+    input.addEventListener('keydown', (e) => {
+      const items = this._paletteVisible || [];
+      if (e.key === 'ArrowDown') { e.preventDefault(); this._paletteIndex = Math.min(items.length-1, this._paletteIndex+1); this._renderPaletteResults(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this._paletteIndex = Math.max(0, this._paletteIndex-1); this._renderPaletteResults(); }
+      else if (e.key === 'Enter') { e.preventDefault(); const item = items[this._paletteIndex]; if (item) this._runPaletteItem(item); }
+      else if (e.key === 'Escape') { e.preventDefault(); this.closePalette(); }
+    });
+  },
+
+  closePalette() {
+    document.getElementById('cmdk-overlay')?.remove();
+  },
+
+  _buildPaletteCommands(isAdmin) {
+    const cmds = [];
+    // Navigation
+    cmds.push({ type: 'nav', label: 'Go to My Igloos',     hint: 'Workspaces', icon: icon.igloo,     run: () => this.setView('igloos') });
+    cmds.push({ type: 'nav', label: 'Go to Templates',     hint: 'Browse',     icon: icon.templates, run: () => this.setView('templates') });
+    cmds.push({ type: 'nav', label: 'Go to Organizations', hint: 'Teams',      icon: icon.users,     run: () => this.setView('orgs') });
+    cmds.push({ type: 'nav', label: 'Open Settings',       hint: 'Account',    icon: icon.settings,  run: () => this.setView('userSettings') });
+    if (isAdmin) {
+      cmds.push({ type: 'nav', label: 'Admin: Users',         hint: 'Manage', icon: icon.users, run: () => this.setView('users') });
+      cmds.push({ type: 'nav', label: 'Admin: All Workspaces', hint: 'Manage', icon: icon.igloo, run: () => this.setView('admin-workspaces') });
+    }
+    // Quick actions
+    cmds.push({ type: 'action', label: 'New workspace',  hint: 'Create',  icon: '+', run: () => this.showNewIgloo() });
+    cmds.push({ type: 'action', label: 'Sign out',       hint: 'Account', icon: '⏻', run: () => this.logout() });
+    // Workspaces
+    (state.workspaces || []).forEach(w => {
+      const statusLabel = w.status === 'running' ? '● running' : w.status === 'sleeping' ? '○ sleeping' : w.status;
+      cmds.push({ type: 'workspace', label: w.name, hint: statusLabel, icon: icon.igloo, run: () => { state.selectedWsId = w.id; this.setView('igloos'); } });
+    });
+    // Templates
+    (state.templates || []).forEach(t => {
+      cmds.push({ type: 'template', label: `Create from ${t.name}`, hint: 'Template', icon: icon.templates, run: () => { this.showNewIgloo(); setTimeout(() => this.selectTemplate(t.id), 80); } });
+    });
+    this._paletteCommands = cmds;
+  },
+
+  _renderPaletteResults() {
+    const q = (this._paletteFilter || '').trim().toLowerCase();
+    const matches = q
+      ? this._paletteCommands.filter(c => {
+          const hay = (c.label + ' ' + (c.hint || '')).toLowerCase();
+          return q.split(/\s+/).every(part => hay.includes(part));
+        })
+      : this._paletteCommands;
+    this._paletteVisible = matches;
+    if (this._paletteIndex >= matches.length) this._paletteIndex = Math.max(0, matches.length - 1);
+
+    const results = document.getElementById('cmdk-results');
+    if (!results) return;
+    if (!matches.length) {
+      results.innerHTML = '<div class="cmdk-empty">No matches</div>';
+      return;
+    }
+    // Group by type for visual separation
+    const groups = { nav: 'Navigation', action: 'Actions', workspace: 'Workspaces', template: 'Templates' };
+    let html = '';
+    let lastType = null;
+    matches.forEach((c, i) => {
+      if (c.type !== lastType) {
+        html += `<div class="cmdk-group-label">${groups[c.type] || c.type}</div>`;
+        lastType = c.type;
+      }
+      html += `
+        <button class="cmdk-item ${i === this._paletteIndex ? 'cmdk-item--active' : ''}" data-idx="${i}" onmouseenter="app._paletteHover(${i})" onclick="app._paletteClick(${i})">
+          <span class="cmdk-item-icon">${c.icon || ''}</span>
+          <span class="cmdk-item-label">${esc(c.label)}</span>
+          <span class="cmdk-item-hint">${esc(c.hint || '')}</span>
+        </button>
+      `;
+    });
+    results.innerHTML = html;
+    // Auto-scroll active into view
+    const active = results.querySelector('.cmdk-item--active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  },
+
+  _paletteHover(idx) {
+    if (this._paletteIndex === idx) return;
+    this._paletteIndex = idx;
+    // Cheap update — just toggle classes instead of full re-render
+    document.querySelectorAll('.cmdk-item').forEach((el, i) => {
+      el.classList.toggle('cmdk-item--active', i === idx);
+    });
+  },
+
+  _paletteClick(idx) {
+    const item = (this._paletteVisible || [])[idx];
+    if (item) this._runPaletteItem(item);
+  },
+
+  _runPaletteItem(item) {
+    this.closePalette();
+    try { item.run(); } catch (e) { toast(e.message || 'Action failed', 'error'); }
+  },
 };
 
 // ─── Auth pages ───────────────────────────────────────────────────────────────
@@ -2288,6 +2473,19 @@ function showAuthErr(msg) {
   if (el) { el.textContent = msg; el.classList.add('visible'); }
 }
 
+// ─── Command palette hotkey ────────────────────────────────────────────────
+function installPaletteHotkey() {
+  if (window.__paletteHotkeyInstalled) return;
+  window.__paletteHotkeyInstalled = true;
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      if (document.getElementById('cmdk-overlay')) app.closePalette();
+      else app.openPalette();
+    }
+  });
+}
+
 // ─── Bootstrap ────────────────────────────────────────────────────────────────
 async function refreshWorkspaces() {
   const updated = await api.workspaces.list().catch(() => null);
@@ -2301,20 +2499,30 @@ async function refreshWorkspaces() {
 }
 
 async function boot() {
-  [state.templates, state.workspaces] = await Promise.all([
-    api.templates.list().catch(() => []),
-    api.workspaces.list().catch(() => []),
-  ]);
-
   // Restore view from URL on load/refresh.
   const initView = pathToView[window.location.pathname] || 'igloos';
   state.view = initView;
   history.replaceState({ view: initView }, '', window.location.pathname);
 
+  // Render shell + skeleton immediately — don't block on the API.
+  state.templates = state.templates || [];
+  state.workspaces = state.workspaces || [];
+  state._loading = true;
   renderShell();
+  renderSkeletonForView(initView);
+
+  // Fetch in parallel, then swap in real content.
+  const [templates, workspaces] = await Promise.all([
+    api.templates.list().catch(() => []),
+    api.workspaces.list().catch(() => []),
+  ]);
+  state.templates = templates;
+  state.workspaces = workspaces;
+  state._loading = false;
   applyView(initView);
   term.init();
   startLatencyPolling();
+  installPaletteHotkey();
   clearInterval(state.poll);
   state.poll = setInterval(async () => {
     const updated = await api.workspaces.list().catch(() => null);

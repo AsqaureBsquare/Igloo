@@ -575,6 +575,10 @@ function renderWorkspaceDetail(ws) {
 
   const statusLabel = { running: 'Running', sleeping: 'Sleeping', creating: 'Building', deleting: 'Destroying', error: 'Failed' }[ws.status] || ws.status;
 
+  // Default tab: build log if mid-build/failed, else overview
+  const activeTab = state.wsDetailTab || (isBuilding || isFailed || isDeleting ? 'build' : 'overview');
+  state.wsDetailTab = activeTab;
+
   return `
   <div class="ws-detail">
     <div class="ws-detail-header">
@@ -588,42 +592,65 @@ function renderWorkspaceDetail(ws) {
       </button>
     </div>
 
-    <div class="ws-detail-meta">
-      <div class="ws-detail-row"><span class="ws-detail-label">Template</span><span>${esc(ws.template_name || 'custom')}</span></div>
-      <div class="ws-detail-row"><span class="ws-detail-label">Provider</span><span>${esc(providerLabel)}</span></div>
-      <div class="ws-detail-row"><span class="ws-detail-label">Last active</span><span>${timeAgo(ws.last_active_at)}</span></div>
+    <div class="ws-detail-tabs">
+      <button class="ws-detail-tab${activeTab==='overview'?' active':''}" onclick="app.setWsDetailTab('overview')">Overview</button>
+      <button class="ws-detail-tab${activeTab==='build'?' active':''}" onclick="app.setWsDetailTab('build')">Build log</button>
+      <button class="ws-detail-tab${activeTab==='settings'?' active':''}" onclick="app.setWsDetailTab('settings')">Settings</button>
     </div>
 
-    ${!isDeleting ? `
-    <div class="ws-detail-actions">
-      ${canConnect ? `<button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
-      ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
-      ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openNetMap('${ws.id}','${esc(ws.name)}')">Network</button>` : ''}
-      ${canStart   ? `<button class="btn btn-wake" style="width:auto;padding:8px 16px" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
-      ${canStop    ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
-      ${!isBuilding ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.showLogs('${ws.id}','${esc(ws.name)}','${isTerraform?'terraform':'agent'}')">Logs</button>` : ''}
-      ${!isFailed ? `<button class="btn btn-danger" style="width:auto;padding:8px 16px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy</button>` : ''}
-    </div>` : ''}
+    ${activeTab === 'overview' ? `
+      <div class="ws-detail-meta">
+        <div class="ws-detail-row"><span class="ws-detail-label">Template</span><span>${esc(ws.template_name || 'custom')}</span></div>
+        <div class="ws-detail-row"><span class="ws-detail-label">Provider</span><span>${esc(providerLabel)}</span></div>
+        <div class="ws-detail-row"><span class="ws-detail-label">Last active</span><span>${timeAgo(ws.last_active_at)}</span></div>
+        ${ws.created_at ? `<div class="ws-detail-row"><span class="ws-detail-label">Created</span><span>${timeAgo(ws.created_at)}</span></div>` : ''}
+      </div>
 
-    ${isBuilding ? `
-    <div class="ws-detail-section">
-      ${buildingAnimation()}
-      ${renderLogPanel(ws.id)}
-    </div>` : ''}
+      ${!isDeleting ? `
+      <div class="ws-detail-actions">
+        ${canConnect ? `<button class="btn btn-primary" style="width:auto;padding:8px 20px" onclick="app.openTerminal('${ws.id}','${esc(ws.name)}')">Terminal</button>` : ''}
+        ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openVSCode('${ws.id}')">VS Code</button>` : ''}
+        ${canConnect ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.openNetMap('${ws.id}','${esc(ws.name)}')">Network</button>` : ''}
+        ${canStart   ? `<button class="btn btn-wake" style="width:auto;padding:8px 16px" onclick="app.startWorkspace('${ws.id}')">Wake</button>` : ''}
+        ${canStop    ? `<button class="btn btn-ghost" style="width:auto;padding:8px 16px" onclick="app.stopWorkspace('${ws.id}')">Sleep</button>` : ''}
+      </div>` : ''}
 
-    ${isDeleting ? `
-    <div class="ws-detail-section">
-      ${destroyingAnimation()}
-      ${renderLogPanel(ws.id)}
-    </div>` : ''}
+      ${isBuilding ? `<div class="ws-detail-section">${buildingAnimation()}</div>` : ''}
+      ${isDeleting ? `<div class="ws-detail-section">${destroyingAnimation()}</div>` : ''}
+      ${isFailed   ? `<div class="ws-detail-section">${errorAnimation()}</div>` : ''}
+    ` : ''}
 
-    ${isFailed ? `
-    <div class="ws-detail-section">
-      ${errorAnimation()}
-      ${renderLogPanel(ws.id)}
-      <button class="btn btn-danger" style="width:auto;padding:8px 16px;margin-top:8px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy</button>
-    </div>` : ''}
+    ${activeTab === 'build' ? `
+      <div class="ws-detail-section ws-detail-build">
+        ${(isBuilding || isDeleting) ? renderLogPanel(ws.id) : renderInlineBuildLog(ws, isTerraform)}
+      </div>
+    ` : ''}
+
+    ${activeTab === 'settings' ? `
+      <div class="ws-detail-meta">
+        <div class="ws-detail-row"><span class="ws-detail-label">Workspace ID</span><span style="font-family:var(--mono);font-size:11px;color:var(--muted)">${esc(ws.id)}</span></div>
+        <div class="ws-detail-row"><span class="ws-detail-label">Provider</span><span>${esc(providerLabel)}</span></div>
+      </div>
+      <div class="ws-detail-section">
+        <div class="danger-zone-title">Danger zone</div>
+        <p class="danger-zone-desc">Destroying this workspace permanently deletes the container, persistent disk, and all data inside it.</p>
+        <button class="btn btn-danger" style="width:auto;padding:8px 16px;margin-top:8px" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">Destroy workspace</button>
+      </div>
+    ` : ''}
   </div>`;
+}
+
+function renderInlineBuildLog(ws, isTerraform) {
+  // Trigger an async load on the next tick — content appears when fetched
+  setTimeout(() => app._loadLogsInline(ws.id, isTerraform ? 'terraform' : 'agent'), 0);
+  return `
+    <div class="log-panel-wrap">
+      <div class="log-panel-header">
+        <span>${isTerraform ? 'Terraform' : 'Agent'} log</span>
+        <span class="log-panel-meta" id="inline-log-meta-${ws.id}">loading…</span>
+      </div>
+      <pre class="log-panel log-panel--inline" id="inline-log-${ws.id}"></pre>
+    </div>`;
 }
 
 function renderTemplateCard(t, selected) {
@@ -2138,12 +2165,14 @@ window.app = {
   },
 
   openWorkspace(id) {
+    if (state.selectedWsId !== id) state.wsDetailTab = null;
     state.selectedWsId = id;
     renderIgloosView(document.getElementById('ws-search')?.value || '');
   },
 
   closeWorkspace() {
     state.selectedWsId = null;
+    state.wsDetailTab = null;
     renderIgloosView(document.getElementById('ws-search')?.value || '');
   },
 
@@ -2255,6 +2284,31 @@ window.app = {
   copySessionToken() {
     const tok = localStorage.getItem('igloo_token') || '';
     navigator.clipboard.writeText(tok).then(() => toast('Token copied', 'success')).catch(() => toast('Copy failed', 'error'));
+  },
+
+  // ─── Workspace detail tabs ──────────────────────────────────────────────
+  setWsDetailTab(tab) {
+    state.wsDetailTab = tab;
+    const ws = state.workspaces.find(w => w.id === state.selectedWsId);
+    if (!ws) return;
+    const pane = document.getElementById('ws-detail-pane');
+    if (pane) pane.innerHTML = renderWorkspaceDetail(ws);
+  },
+
+  async _loadLogsInline(id, type) {
+    const el = document.getElementById('inline-log-' + id);
+    const meta = document.getElementById('inline-log-meta-' + id);
+    if (!el) return;
+    try {
+      const text = type === 'terraform' ? await api.workspaceLogs(id) : await api.agentLogs(id);
+      const out = (text || '').trim();
+      el.textContent = out || 'No output.';
+      if (meta) meta.textContent = out ? `${out.split('\n').length} lines` : '';
+      el.scrollTop = el.scrollHeight;
+    } catch (e) {
+      el.textContent = 'No logs available yet.';
+      if (meta) meta.textContent = '';
+    }
   },
 
   // ─── Command palette ────────────────────────────────────────────────────

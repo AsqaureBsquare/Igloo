@@ -5,26 +5,24 @@ WORKDIR /app
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -ldflags="-s -w" -o igloo-agent ./cmd/agent
 
-FROM ubuntu:24.04
+FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/user
+ENV WORKSPACE_DIR=/home/user
 
-RUN apt-get update && apt-get install -y \
-    build-essential curl wget git vim nano htop tmux zsh \
-    python3 python3-pip python3-venv nodejs npm jq unzip \
-    ca-certificates openssh-client openssh-server less \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates openssh-server curl \
+    && curl -fsSL https://code-server.dev/install.sh | sh \
+    && apt-get purge -y --auto-remove curl \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
 RUN mkdir -p /run/sshd && \
     printf 'Port 22\nPermitRootLogin no\nPubkeyAuthentication yes\nPasswordAuthentication no\nAuthorizedKeysFile /home/user/.ssh/authorized_keys\nHostKey /home/user/.ssh/ssh_host_rsa_key\nHostKey /home/user/.ssh/ssh_host_ed25519_key\nStrictModes no\n' \
     > /etc/ssh/igloo_sshd_config
-
-RUN curl -fsSL https://code-server.dev/install.sh | sh
 
 COPY --from=builder /app/igloo-agent /usr/local/bin/igloo-agent
 COPY workspace/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 WORKDIR /home/user
-
 ENTRYPOINT ["/entrypoint.sh"]

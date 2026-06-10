@@ -147,6 +147,11 @@ func startCodeServer(workspaceID string) {
 		return
 	}
 
+	workspaceDir := os.Getenv("WORKSPACE_DIR")
+	if workspaceDir == "" {
+		workspaceDir = "/home/user"
+	}
+
 	// Wait a moment for the workspace to settle
 	time.Sleep(2 * time.Second)
 
@@ -154,8 +159,8 @@ func startCodeServer(workspaceID string) {
 		"--bind-addr", "127.0.0.1:"+codeServerPort,
 		"--auth", "none",
 		"--disable-telemetry",
-		"--user-data-dir", "/workspace/.vscode-data",
-		"/workspace",
+		"--user-data-dir", workspaceDir+"/.vscode-data",
+		workspaceDir,
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -164,7 +169,7 @@ func startCodeServer(workspaceID string) {
 		log.Printf("[igloo-agent] failed to start code-server: %v", err)
 		return
 	}
-	log.Printf("[igloo-agent] code-server started on :%s (workspace=%s)", codeServerPort, workspaceID)
+	log.Printf("[igloo-agent] code-server started on :%s (workspace=%s, dir=%s)", codeServerPort, workspaceID, workspaceDir)
 	cmd.Wait()
 }
 

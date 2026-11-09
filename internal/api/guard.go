@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,11 @@ func (h *Handler) claimVars(ws *models.Workspace) map[string]string {
 			out[k] = v
 		}
 	}
+	// Where workspaces run is the operator's choice, never the user's.
+	delete(out, "workspace_namespace")
+	if ns := os.Getenv("IGLOO_WORKSPACE_NAMESPACE"); ns != "" {
+		out["workspace_namespace"] = ns
+	}
 	if _, guarded := policyOf(ws); !guarded {
 		return out
 	}
@@ -93,6 +99,13 @@ func (h *Handler) claimVars(ws *models.Workspace) map[string]string {
 	// http://igloo-guard.<namespace>.svc.cluster.local:3128 -> <namespace>
 	if labels := strings.Split(base.Hostname(), "."); len(labels) >= 3 && labels[2] == "svc" {
 		out["guard_namespace"] = labels[1]
+	}
+	// http://<release>-server.<namespace>.svc.cluster.local -> <release>-server. The chart names the
+	// Service after the release, so it cannot be assumed to be "igloo-server".
+	if u, err := url.Parse(os.Getenv("IGLOO_SERVER_URL")); err == nil {
+		if labels := strings.Split(u.Hostname(), "."); len(labels) >= 3 && labels[2] == "svc" {
+			out["guard_server_service"] = labels[0]
+		}
 	}
 	return out
 }

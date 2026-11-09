@@ -256,3 +256,19 @@ func TestEnforcementProbe(t *testing.T) {
 		t.Error("the probe must not exist when the gateway is off")
 	}
 }
+
+// The namespace the chart creates must be the one the server and provisioner are told to use,
+// otherwise a custom workspace namespace is never created and two releases collide on "workspaces".
+func TestWorkspaceNamespaceFollowsTheValue(t *testing.T) {
+	ns := regexp.MustCompile(`(?m)^kind: Namespace\s*\nmetadata:\s*\n\s+name:\s*(\S+)`)
+	for value, want := range map[string]string{"": "workspaces", "team-a-ws": "team-a-ws"} {
+		var set []string
+		if value != "" {
+			set = append(set, "provisioner.workspace.namespace="+value)
+		}
+		m := ns.FindStringSubmatch(render(t, set...))
+		if m == nil || m[1] != want {
+			t.Errorf("namespace %q: chart creates %v, want %s", value, m, want)
+		}
+	}
+}

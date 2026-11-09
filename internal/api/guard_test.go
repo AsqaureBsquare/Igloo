@@ -314,3 +314,32 @@ func TestCreatingAGuardedWorkspace(t *testing.T) {
 		t.Errorf("unguarded create: %d, want 201", got)
 	}
 }
+
+// The chart names the server's Service after the release, and lets the operator pick the namespace
+// workspaces run in. Neither can be assumed, and a user must not be able to choose the namespace.
+func TestClaimVarsCarryTheServerServiceAndWorkspaceNamespaceFromTheDeployment(t *testing.T) {
+	g := newGuardRig(t)
+	ws := g.workspace(t, "w1", &guard.Policy{Allow: []string{"example.com"}})
+	ws.Vars["workspace_namespace"] = "kube-system"
+
+	t.Setenv("IGLOO_SERVER_URL", "http://acme-server.platform.svc.cluster.local")
+	t.Setenv("IGLOO_WORKSPACE_NAMESPACE", "acme-ws")
+	v := g.h.claimVars(ws)
+	if v["guard_server_service"] != "acme-server" {
+		t.Errorf("guard_server_service = %q, want acme-server", v["guard_server_service"])
+	}
+	if v["workspace_namespace"] != "acme-ws" {
+		t.Errorf("workspace_namespace = %q: the operator's value must win over the user's", v["workspace_namespace"])
+	}
+
+	t.Setenv("IGLOO_WORKSPACE_NAMESPACE", "")
+	if got, set := g.h.claimVars(ws)["workspace_namespace"]; set {
+		t.Errorf("a user-supplied workspace_namespace survived: %q", got)
+	}
+
+	// An address that is not an in-cluster Service name says nothing about the Service.
+	t.Setenv("IGLOO_SERVER_URL", "https://igloo.example.com")
+	if got, set := g.h.claimVars(ws)["guard_server_service"]; set {
+		t.Errorf("guard_server_service = %q for a public URL", got)
+	}
+}

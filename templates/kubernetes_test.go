@@ -32,3 +32,22 @@ func TestKubernetesTemplateKeepsItsWorkspacesConfined(t *testing.T) {
 		}
 	}
 }
+
+// The server's Service, the gateway's pod labels and the workspaces' namespace all depend on how the
+// chart was installed. A name written into the template works on the default install and fails on
+// every other one, which only a fresh install elsewhere would show.
+func TestKubernetesTemplateDoesNotAssumeTheDefaultInstall(t *testing.T) {
+	b, err := os.ReadFile("kubernetes/main.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		code := strings.TrimSpace(line)
+		if strings.HasPrefix(code, "#") || strings.HasPrefix(code, "variable ") || strings.Contains(code, "gateway_service =") {
+			continue
+		}
+		if strings.Contains(code, `"igloo-server`) || strings.Contains(code, `"igloo-guard`) || strings.Contains(code, `= "workspaces"`) {
+			t.Errorf("template hardcodes a name that depends on the install: %s", code)
+		}
+	}
+}

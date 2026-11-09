@@ -108,10 +108,12 @@ variable "guard_token" {
 variable "guard_route_base" { default = "" }
 variable "guard_required" { default = "" }
 variable "guard_namespace" { default = "default" } # where the Igloo server and gateway run
+variable "guard_server_service" { default = "igloo-server" } # the Igloo server's Service name
+variable "workspace_namespace" { default = "workspaces" }
 
 locals {
   name      = "ws-${igloo_agent.main.workspace_id}"
-  namespace = "workspaces"
+  namespace = var.workspace_namespace
   labels    = { "igloo.dev/workspace-id" = igloo_agent.main.workspace_id }
   # Only the yes/no is revealed: the proxy URL itself carries a credential and stays
   # sensitive, so it never shows up in plans or in the build log.
@@ -124,8 +126,8 @@ locals {
   gateway_host = var.guard_route_base != "" ? regex("^https?://([^/:]+)", var.guard_route_base)[0] : ""
   no_proxy = join(",", compact([
     "localhost", "127.0.0.1", local.gateway_host,
-    "igloo-server", "igloo-server.${var.guard_namespace}",
-    "igloo-server.${var.guard_namespace}.svc", "igloo-server.${var.guard_namespace}.svc.cluster.local",
+    var.guard_server_service, "${var.guard_server_service}.${var.guard_namespace}",
+    "${var.guard_server_service}.${var.guard_namespace}.svc", "${var.guard_server_service}.${var.guard_namespace}.svc.cluster.local",
   ]))
   # igloo-guard.<namespace>.svc.cluster.local -> igloo-guard
   gateway_service = local.gateway_host != "" ? split(".", local.gateway_host)[0] : "igloo-guard"
@@ -149,7 +151,7 @@ locals {
 data "kubernetes_service" "igloo_server" {
   count = local.guarded ? 1 : 0
   metadata {
-    name      = "igloo-server"
+    name      = var.guard_server_service
     namespace = var.guard_namespace
   }
 }
@@ -211,8 +213,8 @@ resource "kubernetes_deployment" "workspace" {
         dynamic "host_aliases" {
           for_each = local.guarded ? {
             (data.kubernetes_service.igloo_server[0].spec[0].cluster_ip) = [
-              "igloo-server", "igloo-server.${var.guard_namespace}",
-              "igloo-server.${var.guard_namespace}.svc", "igloo-server.${var.guard_namespace}.svc.cluster.local",
+              var.guard_server_service, "${var.guard_server_service}.${var.guard_namespace}",
+              "${var.guard_server_service}.${var.guard_namespace}.svc", "${var.guard_server_service}.${var.guard_namespace}.svc.cluster.local",
             ]
             (data.kubernetes_service.igloo_gateway[0].spec[0].cluster_ip) = [
               local.gateway_service, "${local.gateway_service}.${var.guard_namespace}",
@@ -290,7 +292,7 @@ resource "kubernetes_network_policy_v1" "guard" {
           match_labels = { "kubernetes.io/metadata.name" = var.guard_namespace }
         }
         pod_selector {
-          match_labels = { "app.kubernetes.io/name" = "igloo-server" }
+          match_labels = { "app.kubernetes.io/name" = var.guard_server_service }
         }
       }
       ports {
@@ -304,7 +306,7 @@ resource "kubernetes_network_policy_v1" "guard" {
           match_labels = { "kubernetes.io/metadata.name" = var.guard_namespace }
         }
         pod_selector {
-          match_labels = { "app.kubernetes.io/name" = "igloo-guard" }
+          match_labels = { "app.kubernetes.io/name" = local.gateway_service }
         }
       }
       ports {

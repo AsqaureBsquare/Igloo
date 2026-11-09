@@ -16,12 +16,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -48,23 +50,31 @@ type client struct {
 
 func (c *client) do(method, path string, body any) (int, []byte) {
 	c.t.Helper()
-	var rdr io.Reader
+	var payload []byte
 	if body != nil {
-		b, _ := json.Marshal(body)
-		rdr = bytes.NewReader(b)
+		payload, _ = json.Marshal(body)
 	}
-	req, _ := http.NewRequest(method, base+path, rdr)
-	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	// `kubectl port-forward` exits whenever a connection through it is reset and comes back a moment
+	// later. A refused connection never reached the server, so asking again is safe for any method.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		req, _ := http.NewRequest(method, base+path, bytes.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			if errors.Is(err, syscall.ECONNREFUSED) && time.Now().Before(deadline) {
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+			c.t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		out, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, out
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		c.t.Fatalf("%s %s: %v", method, path, err)
-	}
-	defer resp.Body.Close()
-	out, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, out
 }
 
 func (c *client) json(method, path string, body any, want int, out any) {

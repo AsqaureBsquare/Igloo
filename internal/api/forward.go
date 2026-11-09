@@ -14,6 +14,11 @@ import (
 	"github.com/igloo-dev/igloo/internal/models"
 )
 
+const (
+	logsTicketRole = "logs"
+	logsTicketTTL  = 30 * time.Second
+)
+
 type tcpMsg struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
@@ -40,12 +45,30 @@ func (h *Handler) ForwardToken(w http.ResponseWriter, r *http.Request) {
 	h.json(w, http.StatusOK, map[string]string{"token": token})
 }
 
+// GET /api/workspaces/{id}/logs-ticket
+// Issues a 30-second token that can only open this workspace's provision-log
+// stream. The browser's EventSource can't set headers, so the ticket goes in the
+// URL instead of the long-lived session token.
+func (h *Handler) LogsTicket(w http.ResponseWriter, r *http.Request) {
+	ws, err := h.Store.GetWorkspace(r.Context(), chi.URLParam(r, "id"))
+	if err != nil || ws.UserID != ctxUserID(r) {
+		h.err(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	ticket, err := h.Auth.SignConn(ws.ID, logsTicketRole, logsTicketTTL)
+	if err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	h.json(w, http.StatusOK, map[string]string{"ticket": ticket})
+}
+
 // GET /api/workspaces/{id}/forward?token=...&port=22
 // WebSocket — raw TCP tunnel to the given port inside the workspace container.
 func (h *Handler) Forward(w http.ResponseWriter, r *http.Request) {
 	wsID := chi.URLParam(r, "id")
 
-	token := r.URL.Query().Get("token")
+	token := connToken(r)
 	claims, err := h.Auth.ParseConn(token)
 	if err != nil || claims.WorkspaceID != wsID || claims.Role != "forward" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -68,6 +91,7 @@ func (h *Handler) Forward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer clientConn.Close()
+	clientConn.SetReadLimit(maxClientFrame)
 
 	chanID := uuid.NewString()
 	ch, cancel := h.Relay.Subscribe(wsID)
@@ -77,7 +101,9 @@ func (h *Handler) Forward(w http.ResponseWriter, r *http.Request) {
 	openRaw, _ := json.Marshal(tcpMsg{Type: "tcp_open", ID: chanID, Path: port})
 	h.Relay.SendToAgent(wsID, openRaw)
 
-	// Wait for tcp_ready
+	// Wait for tcp_ready. The agent answers tcp_close instead when it can't reach the
+	// port (for example code-server is still starting): say so at once, instead of
+	// leaving the client waiting out the timeout with no explanation.
 	ctx, ctxCancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer ctxCancel()
 	for {
@@ -87,10 +113,18 @@ func (h *Handler) Forward(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			var m tcpMsg
-			if json.Unmarshal(msg, &m) == nil && m.Type == "tcp_ready" && m.ID == chanID {
+			if json.Unmarshal(msg, &m) != nil || m.ID != chanID {
+				continue
+			}
+			if m.Type == "tcp_ready" {
 				goto ready
 			}
+			if m.Type == "tcp_close" {
+				closeForward(clientConn, "workspace could not open port "+port+" (is the service running yet?)")
+				return
+			}
 		case <-ctx.Done():
+			closeForward(clientConn, "workspace agent did not answer within 10s")
 			return
 		}
 	}
@@ -138,4 +172,12 @@ ready:
 			return
 		}
 	}
+}
+
+// closeForward ends a tunnel with a WebSocket close frame that carries the reason
+// (code 1013, "try again later"), so clients can show it.
+func closeForward(c *websocket.Conn, reason string) {
+	c.WriteControl(websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseTryAgainLater, reason),
+		time.Now().Add(2*time.Second))
 }

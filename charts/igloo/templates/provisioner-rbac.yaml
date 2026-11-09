@@ -12,6 +12,45 @@ rules:
 - apiGroups: [""]
   resources: ["persistentvolumeclaims", "namespaces"]
   verbs: ["create", "get", "delete", "list"]
+{{- if .Values.guard.enabled }}
+# Guarded workspaces get a network policy that confines them to the gateway; only needed
+# (and only granted) when the gateway is enabled.
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["create", "get", "list", "update", "patch", "delete"]
+{{- end }}
+{{- if .Values.guard.enabled }}
+---
+# A guarded workspace has no DNS, so its template looks up the cluster addresses of the Igloo
+# server and the gateway and writes them into the pod's hosts file. Read access to exactly those
+# two services, in this namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "igloo.provisioner.fullname" . }}-services
+  labels:
+    {{- include "igloo.provisioner.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames: [{{ include "igloo.server.fullname" . | quote }}, {{ include "igloo.guard.fullname" . | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "igloo.provisioner.fullname" . }}-services
+  labels:
+    {{- include "igloo.provisioner.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "igloo.provisioner.fullname" . }}-services
+subjects:
+- kind: ServiceAccount
+  name: {{ include "igloo.provisioner.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

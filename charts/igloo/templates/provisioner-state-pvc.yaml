@@ -1,0 +1,16 @@
+{{- if eq .Values.provisioner.workspace.tfStateBucket "local" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "igloo.provisioner.fullname" . }}-state
+  labels:
+    {{- include "igloo.provisioner.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.provisioner.workspace.stateStorageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.provisioner.workspace.stateStorageSize | default "1Gi" }}
+{{- end }}

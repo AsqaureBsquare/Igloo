@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_call: # reused by image-publish so a broken main can't deploy
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go build, vet and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build -mod=vendor ./...
+      - name: Vet
+        run: go vet -mod=vendor ./internal/... ./cmd/...
+      - name: Test (race detector)
+        run: go test -mod=vendor -race ./internal/... ./cmd/...
+      - name: Compile the end-to-end tests (they run against a live cluster, not here)
+        run: go vet -mod=vendor -tags e2e ./e2e
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Lint
+        run: helm lint charts/igloo --set server.jwtSecret=ci --set provisioner.key=ci --set guard.enabled=true
+      - name: Chart tests (render with helm and check the result)
+        run: go test -mod=vendor ./charts/...
+      - name: Render (defaults, local state, dev UI, signup)
+        run: |
+          helm template t charts/igloo --set server.jwtSecret=ci --set provisioner.key=ci > /dev/null
+          helm template t charts/igloo --set server.jwtSecret=ci --set provisioner.key=ci \
+            --set provisioner.workspace.tfStateBucket=local \
+            --set server.devUI.hostPath=/tmp/ui --set server.allowSignup=true > /dev/null
+
+  python:
+    name: Python client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test the client
+        working-directory: clients/python
+        run: python -m unittest -v test_igloo_sandbox
+      - name: Check the demo parses
+        run: python -m py_compile examples/agent_demo.py
+
+  ui:
+    name: UI syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check JavaScript parses
+        run: node --check internal/server/static/app.js

@@ -32,7 +32,7 @@ func NewPostgresStore(ctx context.Context, url string) (*PostgresStore, error) {
 	return s, nil
 }
 
-// migrate runs schema.sql idempotently (all statements use IF NOT EXISTS).
+// migrate applies sqlSchema idempotently (every statement is IF NOT EXISTS, so new columns are ALTERs at the end).
 func (s *PostgresStore) migrate(ctx context.Context) error {
 	_, err := s.db.Exec(ctx, sqlSchema)
 	return err
@@ -42,9 +42,9 @@ func (s *PostgresStore) migrate(ctx context.Context) error {
 
 func (s *PostgresStore) CreateUser(ctx context.Context, u *models.User) error {
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO users (id, email, name, password_hash, tailscale_auth_key, is_admin, login_type, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		u.ID, u.Email, u.Name, u.PasswordHash, u.TailscaleAuthKey, u.IsAdmin, u.LoginType, u.CreatedAt)
+		INSERT INTO users (id, email, name, password_hash, tailscale_auth_key, is_admin, login_type, created_at, password_changed_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		u.ID, u.Email, u.Name, u.PasswordHash, u.TailscaleAuthKey, u.IsAdmin, u.LoginType, u.CreatedAt, nullTime(u.PasswordChangedAt))
 	if err != nil && isUniqueViolation(err) {
 		return ErrConflict
 	}
@@ -52,25 +52,25 @@ func (s *PostgresStore) CreateUser(ctx context.Context, u *models.User) error {
 }
 
 func (s *PostgresStore) GetUser(ctx context.Context, id string) (*models.User, error) {
-	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at FROM users WHERE id=$1`, id)
+	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at,password_changed_at FROM users WHERE id=$1`, id)
 	return scanUser(row)
 }
 
 func (s *PostgresStore) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at FROM users WHERE email=$1`, email)
+	row := s.db.QueryRow(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at,password_changed_at FROM users WHERE email=$1`, email)
 	return scanUser(row)
 }
 
 func (s *PostgresStore) UpdateUser(ctx context.Context, u *models.User) error {
 	_, err := s.db.Exec(ctx, `
 		UPDATE users SET email=$2, name=$3, password_hash=$4,
-		tailscale_auth_key=$5, is_admin=$6, login_type=$7 WHERE id=$1`,
-		u.ID, u.Email, u.Name, u.PasswordHash, u.TailscaleAuthKey, u.IsAdmin, u.LoginType)
+		tailscale_auth_key=$5, is_admin=$6, login_type=$7, password_changed_at=$8 WHERE id=$1`,
+		u.ID, u.Email, u.Name, u.PasswordHash, u.TailscaleAuthKey, u.IsAdmin, u.LoginType, nullTime(u.PasswordChangedAt))
 	return err
 }
 
 func (s *PostgresStore) ListUsers(ctx context.Context) ([]*models.User, error) {
-	rows, err := s.db.Query(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at FROM users WHERE id != '__platform__' ORDER BY created_at`)
+	rows, err := s.db.Query(ctx, `SELECT id,email,name,password_hash,tailscale_auth_key,is_admin,login_type,created_at,password_changed_at FROM users WHERE id != '__platform__' ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -92,32 +92,30 @@ func (s *PostgresStore) DeleteUser(ctx context.Context, id string) error {
 
 // ─── Workspaces ───────────────────────────────────────────────────────────────
 
+// wsCols is the single column list shared by every workspace SELECT and by scanWorkspace.
+const wsCols = `id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta`
+
 func (s *PostgresStore) CreateWorkspace(ctx context.Context, w *models.Workspace) error {
 	vars, _ := json.Marshal(w.Vars)
 	meta, _ := json.Marshal(w.Meta)
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO workspaces (id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-		w.ID, w.UserID, w.Name, w.TemplateID, w.TemplateName, w.Provider, string(w.Status),
+		INSERT INTO workspaces (`+wsCols+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+		w.ID, w.OrgID, w.UserID, w.Name, w.TemplateID, w.TemplateName, w.Provider, string(w.Status),
 		w.AgentToken, w.CostPerHr, w.CreatedAt, w.UpdatedAt, w.LastActiveAt, vars, meta)
 	return err
 }
 
 func (s *PostgresStore) GetWorkspace(ctx context.Context, id string) (*models.Workspace, error) {
-	row := s.db.QueryRow(ctx, `SELECT id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE id=$1`, id)
+	row := s.db.QueryRow(ctx, `SELECT `+wsCols+` FROM workspaces WHERE id=$1`, id)
 	return scanWorkspace(row)
 }
 
+// ListWorkspaces hides deleted workspaces; empty userID / orgID mean "any", matching the memory store.
 func (s *PostgresStore) ListWorkspaces(ctx context.Context, userID, orgID string) ([]*models.Workspace, error) {
-	var rows pgx.Rows
-	var err error
-	if userID == "" {
-		rows, err = s.db.Query(ctx, `SELECT id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE status != 'deleted' ORDER BY created_at DESC`)
-	} else if orgID != "" {
-		rows, err = s.db.Query(ctx, `SELECT id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE user_id=$1 AND org_id=$2 AND status != 'deleted' ORDER BY created_at DESC`, userID, orgID)
-	} else {
-		rows, err = s.db.Query(ctx, `SELECT id,org_id,user_id,name,template_id,template_name,provider,status,agent_token,cost_per_hr,created_at,updated_at,last_active_at,vars,meta FROM workspaces WHERE user_id=$1 AND status != 'deleted' ORDER BY created_at DESC`, userID)
-	}
+	rows, err := s.db.Query(ctx, `SELECT `+wsCols+` FROM workspaces
+		WHERE status != 'deleted' AND ($1 = '' OR user_id = $1) AND ($2 = '' OR org_id = $2)
+		ORDER BY created_at DESC`, userID, orgID)
 	if err != nil {
 		return nil, err
 	}
@@ -125,9 +123,10 @@ func (s *PostgresStore) ListWorkspaces(ctx context.Context, userID, orgID string
 	var out []*models.Workspace
 	for rows.Next() {
 		w, err := scanWorkspace(rows)
-		if err == nil {
-			out = append(out, w)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, w)
 	}
 	return out, rows.Err()
 }
@@ -136,10 +135,10 @@ func (s *PostgresStore) UpdateWorkspace(ctx context.Context, w *models.Workspace
 	vars, _ := json.Marshal(w.Vars)
 	meta, _ := json.Marshal(w.Meta)
 	_, err := s.db.Exec(ctx, `
-		UPDATE workspaces SET user_id=$2,name=$3,template_id=$4,template_name=$5,provider=$6,
-		status=$7,agent_token=$8,cost_per_hr=$9,updated_at=$10,last_active_at=$11,vars=$12,meta=$13
+		UPDATE workspaces SET org_id=$2,user_id=$3,name=$4,template_id=$5,template_name=$6,provider=$7,
+		status=$8,agent_token=$9,cost_per_hr=$10,updated_at=$11,last_active_at=$12,vars=$13,meta=$14
 		WHERE id=$1`,
-		w.ID, w.UserID, w.Name, w.TemplateID, w.TemplateName, w.Provider, string(w.Status),
+		w.ID, w.OrgID, w.UserID, w.Name, w.TemplateID, w.TemplateName, w.Provider, string(w.Status),
 		w.AgentToken, w.CostPerHr, w.UpdatedAt, w.LastActiveAt, vars, meta)
 	return err
 }
@@ -151,19 +150,22 @@ func (s *PostgresStore) DeleteWorkspace(ctx context.Context, id string) error {
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 
+const tplCols = `id,org_id,name,description,provider,icon,builtin,version,variables,files,created_at,updated_at`
+
 func (s *PostgresStore) UpsertTemplate(ctx context.Context, t *models.Template) error {
 	vars, _ := json.Marshal(t.Variables)
 	files, _ := json.Marshal(t.Files)
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO templates (id,name,description,provider,icon,builtin,variables,files,created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-		ON CONFLICT (id) DO UPDATE SET name=$2,description=$3,provider=$4,icon=$5,builtin=$6,variables=$7,files=$8`,
-		t.ID, t.Name, t.Description, t.Provider, t.Icon, t.Builtin, vars, files, t.CreatedAt)
+		INSERT INTO templates (`+tplCols+`)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (id) DO UPDATE SET org_id=$2,name=$3,description=$4,provider=$5,icon=$6,builtin=$7,
+			version=$8,variables=$9,files=$10,updated_at=$12`,
+		t.ID, t.OrgID, t.Name, t.Description, t.Provider, t.Icon, t.Builtin, t.Version, vars, files, t.CreatedAt, t.UpdatedAt)
 	return err
 }
 
 func (s *PostgresStore) GetTemplate(ctx context.Context, id string) (*models.Template, error) {
-	row := s.db.QueryRow(ctx, `SELECT id,name,description,provider,icon,builtin,variables,files,created_at FROM templates WHERE id=$1`, id)
+	row := s.db.QueryRow(ctx, `SELECT `+tplCols+` FROM templates WHERE id=$1`, id)
 	return scanTemplate(row)
 }
 
@@ -171,9 +173,9 @@ func (s *PostgresStore) ListTemplates(ctx context.Context, orgID string) ([]*mod
 	var rows pgx.Rows
 	var err error
 	if orgID != "" {
-		rows, err = s.db.Query(ctx, `SELECT id,org_id,name,description,provider,icon,builtin,variables,files,created_at FROM templates WHERE builtin=true OR org_id=$1 ORDER BY name`, orgID)
+		rows, err = s.db.Query(ctx, `SELECT `+tplCols+` FROM templates WHERE builtin=true OR org_id=$1 ORDER BY name`, orgID)
 	} else {
-		rows, err = s.db.Query(ctx, `SELECT id,org_id,name,description,provider,icon,builtin,variables,files,created_at FROM templates WHERE builtin=true ORDER BY name`)
+		rows, err = s.db.Query(ctx, `SELECT `+tplCols+` FROM templates WHERE builtin=true ORDER BY name`)
 	}
 	if err != nil {
 		return nil, err
@@ -182,9 +184,10 @@ func (s *PostgresStore) ListTemplates(ctx context.Context, orgID string) ([]*mod
 	var out []*models.Template
 	for rows.Next() {
 		t, err := scanTemplate(rows)
-		if err == nil {
-			out = append(out, t)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, t)
 	}
 	return out, rows.Err()
 }
@@ -618,18 +621,30 @@ type scanner interface {
 
 func scanUser(row scanner) (*models.User, error) {
 	var u models.User
-	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.TailscaleAuthKey, &u.IsAdmin, &u.LoginType, &u.CreatedAt)
+	var changed *time.Time
+	err := row.Scan(&u.ID, &u.Email, &u.Name, &u.PasswordHash, &u.TailscaleAuthKey, &u.IsAdmin, &u.LoginType, &u.CreatedAt, &changed)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
+	if changed != nil {
+		u.PasswordChangedAt = *changed
+	}
 	return &u, err
+}
+
+// nullTime stores a zero time as NULL.
+func nullTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
 }
 
 func scanWorkspace(row scanner) (*models.Workspace, error) {
 	var w models.Workspace
 	var status string
 	var vars, meta []byte
-	err := row.Scan(&w.ID, &w.UserID, &w.Name, &w.TemplateID, &w.TemplateName, &w.Provider,
+	err := row.Scan(&w.ID, &w.OrgID, &w.UserID, &w.Name, &w.TemplateID, &w.TemplateName, &w.Provider,
 		&status, &w.AgentToken, &w.CostPerHr, &w.CreatedAt, &w.UpdatedAt, &w.LastActiveAt, &vars, &meta)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -648,7 +663,7 @@ func scanWorkspace(row scanner) (*models.Workspace, error) {
 func scanTemplate(row scanner) (*models.Template, error) {
 	var t models.Template
 	var vars, files []byte
-	err := row.Scan(&t.ID, &t.Name, &t.Description, &t.Provider, &t.Icon, &t.Builtin, &vars, &files, &t.CreatedAt)
+	err := row.Scan(&t.ID, &t.OrgID, &t.Name, &t.Description, &t.Provider, &t.Icon, &t.Builtin, &t.Version, &vars, &files, &t.CreatedAt, &t.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -786,7 +801,8 @@ func pgErrCode(err error) string {
 	return ""
 }
 
-// sqlSchema is embedded at compile time from schema.sql.
+// sqlSchema is the one schema applied on startup. Add new columns as trailing
+// ALTER TABLE ... ADD COLUMN IF NOT EXISTS statements so existing databases upgrade in place.
 const sqlSchema = `
 CREATE TABLE IF NOT EXISTS users (
     id              TEXT PRIMARY KEY,
@@ -901,7 +917,71 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     created_at   TIMESTAMPTZ NOT NULL,
     created_by   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS guard_events (
+    id           BIGSERIAL PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    ts           TIMESTAMPTZ NOT NULL,
+    kind         TEXT NOT NULL,
+    decision     TEXT NOT NULL,
+    host         TEXT NOT NULL DEFAULT '',
+    method       TEXT NOT NULL DEFAULT '',
+    path         TEXT NOT NULL DEFAULT '',
+    rule         TEXT NOT NULL DEFAULT '',
+    status       INT NOT NULL DEFAULT 0,
+    bytes        BIGINT NOT NULL DEFAULT 0,
+    detail       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS guard_events_ws_ts_idx ON guard_events(workspace_id, ts DESC, id DESC);
 CREATE INDEX IF NOT EXISTS api_tokens_user_id_idx ON api_tokens(user_id);
 CREATE INDEX IF NOT EXISTS api_tokens_hash_idx ON api_tokens(token_hash);
 ALTER TABLE users ADD COLUMN IF NOT EXISTS login_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ;
+ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 0;
+ALTER TABLE templates ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+CREATE INDEX IF NOT EXISTS workspaces_org_id_idx ON workspaces(org_id);
 `
+
+// ─── Guard events ─────────────────────────────────────────────────────────────
+
+func (s *PostgresStore) AppendGuardEvents(ctx context.Context, evs []models.GuardEvent) error {
+	if len(evs) == 0 {
+		return nil
+	}
+	batch := &pgx.Batch{}
+	for _, e := range evs {
+		batch.Queue(`INSERT INTO guard_events (workspace_id,ts,kind,decision,host,method,path,rule,status,bytes,detail)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			e.WorkspaceID, e.Time, e.Kind, e.Decision, e.Host, e.Method, e.Path, e.Rule, e.Status, e.Bytes, e.Detail)
+	}
+	br := s.db.SendBatch(ctx, batch)
+	defer br.Close()
+	for range evs {
+		if _, err := br.Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *PostgresStore) ListGuardEvents(ctx context.Context, workspaceID string, limit int) ([]models.GuardEvent, error) {
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := s.db.Query(ctx, `SELECT workspace_id,ts,kind,decision,host,method,path,rule,status,bytes,detail
+		FROM guard_events WHERE workspace_id=$1 ORDER BY ts DESC, id DESC LIMIT $2`, workspaceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.GuardEvent
+	for rows.Next() {
+		var e models.GuardEvent
+		if err := rows.Scan(&e.WorkspaceID, &e.Time, &e.Kind, &e.Decision, &e.Host, &e.Method, &e.Path, &e.Rule, &e.Status, &e.Bytes, &e.Detail); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

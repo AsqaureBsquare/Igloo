@@ -132,11 +132,92 @@ Run with `--local` to use an in-memory store (no AWS required).
 
 ---
 
+## Sandboxes and the egress gateway
+
+Igloo can run code, including AI agents, in an isolated workspace whose network access you control,
+with a record of everything it did. Two parts:
+
+- **The egress gateway** (`igloo-guard`). A workspace created with a guard policy can only reach the Igloo
+  server and the gateway (a Kubernetes network policy enforces this, so ignoring the proxy settings
+  gets it nowhere). It has no DNS: the gateway looks up the names it is asked for, and the two
+  addresses the workspace needs are written into its hosts file. The gateway allows the hosts you list, refuses everything else, adds
+  credentials the workspace never holds, and reports every decision.
+- **Sandboxes.** `POST /api/sandboxes` creates a workspace for code: run commands, read and write files,
+  and it deletes itself after its lifetime. With no options it is behind the gateway with a policy that
+  allows nothing.
+
+Turn the gateway on in the chart (it is off by default). It needs a cluster that enforces NetworkPolicy
+(Cilium, Calico, GKE Dataplane V2, or the policy add-on on EKS/AKS); run `helm test <release>` after
+installing to prove yours does.
+
+```yaml
+guard:
+  enabled: true
+  existingSecret: my-gateway-secrets   # keys are secret names, e.g. UPSTREAM_KEY; values never reach Igloo's database
+server:
+  sandboxImage: ghcr.io/asqaurebsquare/igloo-workspace:latest   # sandboxes cannot install anything while starting
+```
+
+Use it from Python (standard library only; see `clients/python`):
+
+```python
+from igloo_sandbox import Sandbox   # IGLOO_URL and IGLOO_TOKEN in the environment
+
+with Sandbox.create(allow=["api.example.com"]) as sb:
+    sb.write_file("job.sh", "echo working")
+    print(sb.exec(["sh", "job.sh"]).stdout)
+    print(sb.activity())            # what the gateway allowed and blocked
+```
+
+`python3 examples/agent_demo.py` walks through it end to end. A policy looks like this:
+
+```json
+{"allow": ["api.example.com", "*.pypi.org"],
+ "routes": [{"name": "llm", "upstream": "https://api.example.com", "header": "Authorization",
+             "prefix": "Bearer ", "secret": "LLM_KEY"}]}
+```
+
+A workspace reaches a route at `$IGLOO_ROUTE_BASE/llm/...` presenting `$IGLOO_ROUTE_TOKEN`; the gateway
+swaps in the real `LLM_KEY`. Policies change without a restart (about 15 seconds). The Network tab in the
+web UI shows each guarded workspace's activity.
+
+What this does not do: HTTPS to an allowed host is allowed or refused by name, not decrypted, so there is
+no per-path policy; an allowed destination can still be misused (for example pushing data to an allowed
+code host); and there is no organisation-wide baseline policy yet. It narrows exposure and records it; it
+does not make an agent safe.
+
+### Organisation-wide baseline
+
+An administrator can set rules that every workspace and sandbox policy must stay inside, from
+**Network baseline** in the admin menu or `PUT /api/admin/guard-baseline`:
+
+```json
+{
+  "mode": "restricted",                    // or "open": every guarded workspace may reach anything not denied
+  "deny": ["*.pastebin.example"],          // never reachable, wins over any allow
+  "ceiling": ["*.corp.example"],           // optional: nothing outside these may be allowed
+  "forbid_private": true,                  // no allow_private
+  "require_guard": true,                   // every new workspace runs behind the gateway
+  "max_sandbox_ttl_seconds": 3600
+}
+```
+
+In **open** mode a workspace's own allow-list no longer matters: it can reach everything except the deny
+list, and private or internal addresses stay blocked while `forbid_private` is set. Credentials, audit and
+the deny list work as before. An open baseline cannot be combined with a ceiling.
+
+A policy that breaks the baseline is refused with a 403 saying why. The baseline is also applied
+when the gateway asks what a workspace may do, so tightening it takes effect for existing
+workspaces within seconds (the stored policy is not rewritten; `GET .../guard-policy` shows an
+`effective` policy next to it). Sandboxes older than a tightened lifetime cap are removed by the
+next expiry pass. Workspaces created without the gateway are not moved behind it.
+
 ## Docker images
 
 ```bash
 docker pull ghcr.io/asquarebsquare/igloo-server:latest
 docker pull ghcr.io/asquarebsquare/igloo-provisioner:latest
+docker pull ghcr.io/asquarebsquare/igloo-guard:latest   # the egress gateway (optional)
 ```
 
 Images are built for `linux/amd64` and `linux/arm64`.

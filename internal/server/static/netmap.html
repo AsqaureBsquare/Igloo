@@ -6,50 +6,50 @@
   <title>Network Map — Igloo</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; background: #020c18; overflow: hidden; font-family: 'JetBrains Mono', monospace; color: #c8e8ff; }
+    html, body { height: 100%; background: #0e1b28; overflow: hidden; font-family: 'JetBrains Mono', monospace; color: #c9dde8; }
 
     .nm-chrome { display: flex; flex-direction: column; height: 100vh; }
 
     .nm-titlebar {
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 16px; height: 40px;
-      background: #030f1f; border-bottom: 1px solid rgba(99,210,255,0.1);
+      background: #0e1b28; border-bottom: 1px solid rgba(255,255,255,0.1);
       flex-shrink: 0;
     }
-    .nm-title { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #c8e8ff; }
-    .nm-subtitle { font-size: 11px; color: #4a7a9b; margin-left: 4px; font-weight: 400; }
+    .nm-title { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #c9dde8; }
+    .nm-subtitle { font-size: 11px; color: #7f9aad; margin-left: 4px; font-weight: 400; }
     .nm-controls { display: flex; gap: 8px; align-items: center; }
-    .nm-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: rgba(0,212,255,0.1); color: #00d4ff; border: 1px solid rgba(0,212,255,0.2); }
-    .nm-refresh { font-size: 11px; color: #4a7a9b; cursor: pointer; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(99,210,255,0.15); background: none; color: #4a7a9b; }
-    .nm-refresh:hover { color: #c8e8ff; border-color: rgba(99,210,255,0.3); }
+    .nm-badge { font-size: 10px; padding: 2px 8px; border-radius: 10px; background: rgba(138,209,240,0.1); color: #8ad1f0; border: 1px solid rgba(138,209,240,0.2); }
+    .nm-refresh { font-size: 11px; color: #7f9aad; cursor: pointer; padding: 4px 8px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.15); background: none; color: #7f9aad; }
+    .nm-refresh:hover { color: #c9dde8; border-color: rgba(255,255,255,0.3); }
 
     .nm-body { flex: 1; min-height: 0; position: relative; }
     svg { width: 100%; height: 100%; }
 
     .nm-legend {
       position: absolute; bottom: 12px; left: 12px;
-      background: rgba(3,15,31,0.85); border: 1px solid rgba(99,210,255,0.1);
+      background: rgba(3,15,31,0.85); border: 1px solid rgba(255,255,255,0.1);
       border-radius: 8px; padding: 10px 14px; font-size: 10px;
       display: flex; flex-direction: column; gap: 6px;
     }
-    .nm-legend-item { display: flex; align-items: center; gap: 6px; color: #4a7a9b; }
+    .nm-legend-item { display: flex; align-items: center; gap: 6px; color: #7f9aad; }
     .nm-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
     .nm-tooltip {
       position: absolute; display: none; pointer-events: none;
-      background: rgba(3,15,31,0.95); border: 1px solid rgba(99,210,255,0.2);
+      background: rgba(3,15,31,0.95); border: 1px solid rgba(255,255,255,0.2);
       border-radius: 6px; padding: 8px 12px; font-size: 11px;
       max-width: 260px; line-height: 1.5;
     }
-    .nm-tooltip strong { color: #00d4ff; display: block; margin-bottom: 2px; }
+    .nm-tooltip strong { color: #8ad1f0; display: block; margin-bottom: 2px; }
 
     .nm-empty {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
-      text-align: center; color: #4a7a9b; font-size: 13px;
+      text-align: center; color: #7f9aad; font-size: 13px;
     }
     .nm-empty .nm-spinner {
-      width: 32px; height: 32px; border: 2px solid rgba(99,210,255,0.15);
-      border-top-color: #00d4ff; border-radius: 50%; margin: 0 auto 12px;
+      width: 32px; height: 32px; border: 2px solid rgba(255,255,255,0.15);
+      border-top-color: #8ad1f0; border-radius: 50%; margin: 0 auto 12px;
       animation: spin 1s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
@@ -59,7 +59,7 @@
 <div class="nm-chrome">
   <div class="nm-titlebar">
     <div class="nm-title">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#00d4ff" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" stroke-opacity=".4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8ad1f0" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9" stroke-opacity=".4"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>
       Network Map
       <span class="nm-subtitle" id="nm-name">—</span>
     </div>
@@ -74,11 +74,11 @@
       Loading network data…
     </div>
     <div class="nm-legend" id="nm-legend" style="display:none">
-      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#00d4ff"></div>Workspace</div>
-      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#00ffb3"></div>Listening port</div>
-      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#9d5cff"></div>Internal / K8s</div>
+      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#8ad1f0"></div>Workspace</div>
+      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#22c55e"></div>Listening port</div>
+      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#a78bfa"></div>Internal / K8s</div>
       <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#ffc400"></div>External</div>
-      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#4a7a9b"></div>Loopback</div>
+      <div class="nm-legend-item"><div class="nm-legend-dot" style="background:#7f9aad"></div>Loopback</div>
     </div>
     <div class="nm-tooltip" id="nm-tooltip"></div>
   </div>
@@ -113,7 +113,7 @@ function nodeType(ip) {
 }
 
 function nodeColor(type) {
-  return { workspace:'#00d4ff', listener:'#00ffb3', internal:'#9d5cff', external:'#ffc400', loopback:'#4a7a9b' }[type] || '#4a7a9b';
+  return { workspace:'#8ad1f0', listener:'#22c55e', internal:'#a78bfa', external:'#ffc400', loopback:'#7f9aad' }[type] || '#7f9aad';
 }
 
 // ─── Build graph from connections ───────────────────────────────────────────
@@ -181,7 +181,7 @@ function render(connections) {
   // Arrow markers
   const defs = svg.append('defs');
   ['outbound','inbound','listen'].forEach(t => {
-    const color = t === 'outbound' ? '#ffc400' : t === 'inbound' ? '#ff6b8a' : '#00ffb3';
+    const color = t === 'outbound' ? '#ffc400' : t === 'inbound' ? '#f87171' : '#22c55e';
     defs.append('marker').attr('id', `arrow-${t}`)
       .attr('viewBox','0 -4 8 8').attr('refX',16).attr('refY',0)
       .attr('markerWidth',6).attr('markerHeight',6).attr('orient','auto')
@@ -201,7 +201,7 @@ function render(connections) {
     .force('collision', d3.forceCollide(36));
 
   const link = g.append('g').selectAll('line').data(links).join('line')
-    .attr('stroke', d => d.type === 'listen' ? '#00ffb3' : d.type === 'outbound' ? '#ffc400' : '#ff6b8a')
+    .attr('stroke', d => d.type === 'listen' ? '#22c55e' : d.type === 'outbound' ? '#ffc400' : '#f87171')
     .attr('stroke-width', 1.5)
     .attr('stroke-dasharray', d => d.type === 'listen' ? '4,3' : null)
     .attr('stroke-opacity', 0.6)
@@ -223,12 +223,12 @@ function render(connections) {
   // Workspace icon
   node.filter(d => d.type === 'workspace').append('text')
     .attr('text-anchor','middle').attr('dy','0.35em')
-    .attr('font-size', 18).attr('fill','#00d4ff').text('❄');
+    .attr('font-size', 18).attr('fill','#8ad1f0').text('❄');
 
   // Listener icon
   node.filter(d => d.type === 'listener').append('text')
     .attr('text-anchor','middle').attr('dy','0.35em')
-    .attr('font-size', 10).attr('fill','#00ffb3').text('⬡');
+    .attr('font-size', 10).attr('fill','#22c55e').text('⬡');
 
   // Remote icon
   node.filter(d => d.type !== 'workspace' && d.type !== 'listener').append('text')
@@ -240,7 +240,7 @@ function render(connections) {
   // Labels
   node.append('text')
     .attr('text-anchor','middle').attr('dy', d => (d.type === 'workspace' ? 28 : d.type === 'listener' ? 16 : 20) + 14)
-    .attr('font-size', 9).attr('fill','#4a7a9b').attr('font-family','monospace')
+    .attr('font-size', 9).attr('fill','#7f9aad').attr('font-family','monospace')
     .text(d => d.label.length > 20 ? d.label.slice(0,18)+'…' : d.label);
 
   node.append('text')
@@ -274,7 +274,7 @@ function render(connections) {
 // ─── Load data ──────────────────────────────────────────────────────────────
 function load() {
   if (!wsId || !token) {
-    document.getElementById('nm-empty').innerHTML = '<div style="color:#ff3d6b">Missing workspace ID or auth token.</div>';
+    document.getElementById('nm-empty').innerHTML = '<div style="color:#ef4444">Missing workspace ID or auth token.</div>';
     return;
   }
   fetch(`/api/workspaces/${wsId}/network`, {
@@ -284,7 +284,7 @@ function load() {
   .then(data => {
     if (!data.connections || data.connections.length === 0) {
       document.getElementById('nm-empty').style.display = '';
-      document.getElementById('nm-empty').innerHTML = '<div style="color:#4a7a9b;font-size:13px">No connections yet.<br><small>Agent sends a snapshot every 30s.</small></div>';
+      document.getElementById('nm-empty').innerHTML = '<div style="color:#7f9aad;font-size:13px">No connections yet.<br><small>Agent sends a snapshot every 30s.</small></div>';
       document.getElementById('nm-legend').style.display = 'none';
       document.getElementById('nm-count').textContent = '0 connections';
       return;
@@ -293,7 +293,7 @@ function load() {
   })
   .catch(e => {
     document.getElementById('nm-empty').style.display = '';
-    document.getElementById('nm-empty').innerHTML = `<div style="color:#ff3d6b">Failed to load: ${e}</div>`;
+    document.getElementById('nm-empty').innerHTML = `<div style="color:#ef4444">Failed to load: ${e}</div>`;
   });
 }
 

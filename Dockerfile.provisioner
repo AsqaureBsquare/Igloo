@@ -1,6 +1,6 @@
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -ldflags="-s -w" -o igloo-provisioner ./cmd/provisioner
@@ -8,10 +8,21 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -ld
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TF_VERSION=1.9.8
-ARG TARGETARCH=amd64
+ARG TARGETARCH
+# SHA-256 of terraform_<version>_linux_<arch>.zip, copied from HashiCorp's SHA256SUMS
+# after verifying its GPG signature (key C874 011F 0AB4 0511 0D02 1055 3436 5D94 72D7 468F).
+# Keep in step with Dockerfile (internal/provisioner/dockerfile_test.go checks it).
+ARG TF_SHA256_AMD64=186e0145f5e5f2eb97cbd785bc78f21bae4ef15119349f6ad4fa535b83b10df8
+ARG TF_SHA256_ARM64=f85868798834558239f6148834884008f2722548f84034c9b0f62934b2d73ebb
 RUN apt-get update && apt-get install -y --no-install-recommends curl unzip ca-certificates && \
+    case "${TARGETARCH}" in \
+      amd64) sum="${TF_SHA256_AMD64}" ;; \
+      arm64) sum="${TF_SHA256_ARM64}" ;; \
+      *) echo "unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
     curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${TARGETARCH}.zip" \
       -o /tmp/tf.zip && \
+    echo "${sum}  /tmp/tf.zip" | sha256sum -c - && \
     unzip /tmp/tf.zip -d /usr/local/bin && \
     rm /tmp/tf.zip && \
     apt-get purge -y --auto-remove curl unzip && \
@@ -21,7 +32,9 @@ RUN mkdir -p /usr/local/share/terraform/providers
 COPY prebake/ /prebake/
 RUN cd /prebake && terraform providers mirror /usr/local/share/terraform/providers && rm -rf /prebake
 
-RUN printf 'provider_installation {\n  filesystem_mirror {\n    path    = "/usr/local/share/terraform/providers"\n    include = ["hashicorp/*", "kreuzwerker/*"]\n  }\n  direct {\n    exclude = ["hashicorp/*", "kreuzwerker/*"]\n  }\n}\n' > /root/.terraformrc
+# Everything the templates use comes from the baked mirror, so creating a workspace
+# needs no internet. Provider addresses are lower-cased by Terraform.
+RUN printf 'provider_installation {\n  filesystem_mirror {\n    path    = "/usr/local/share/terraform/providers"\n    include = ["hashicorp/*", "kreuzwerker/*", "asqaurebsquare/*"]\n  }\n  direct {\n    exclude = ["hashicorp/*", "kreuzwerker/*", "asqaurebsquare/*"]\n  }\n}\n' > /root/.terraformrc
 
 COPY --from=builder /app/igloo-provisioner /usr/local/bin/igloo-provisioner
 CMD ["igloo-provisioner"]

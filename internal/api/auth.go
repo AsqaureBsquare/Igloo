@@ -18,6 +18,7 @@ func (h *Handler) AuthConfig(w http.ResponseWriter, r *http.Request) {
 	cfg := map[string]any{
 		"password_auth_enabled": !h.DisablePasswordAuth,
 		"oidc_enabled":          h.OIDC != nil,
+		"signup_enabled":        h.signupOpen(r.Context()),
 	}
 	if h.OIDC != nil {
 		cfg["oidc_button_text"] = h.OIDC.ButtonText()
@@ -140,6 +141,19 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/?token="+tok, http.StatusFound)
 }
 
+// signupOpen reports whether the sign-up form should be offered: always for the
+// first account, otherwise only when IGLOO_ALLOW_SIGNUP is set.
+func (h *Handler) signupOpen(ctx context.Context) bool {
+	if h.DisablePasswordAuth {
+		return false
+	}
+	if h.AllowSignup {
+		return true
+	}
+	users, _ := h.Store.ListUsers(ctx)
+	return len(users) == 0
+}
+
 // POST /api/auth/register
 func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 	if h.DisablePasswordAuth {
@@ -159,8 +173,8 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusBadRequest, "name, email, and password are required")
 		return
 	}
-	if len(body.Password) < 8 {
-		h.err(w, http.StatusBadRequest, "password must be at least 8 characters")
+	if err := validNewPassword(body.Password); err != nil {
+		h.err(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -170,9 +184,16 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// First user to register becomes admin.
+	// First user to register becomes admin. After that, signup stays closed unless
+	// IGLOO_ALLOW_SIGNUP=true; otherwise an admin creates accounts.
+	h.regMu.Lock()
+	defer h.regMu.Unlock()
 	existing, _ := h.Store.ListUsers(r.Context())
 	isFirst := len(existing) == 0
+	if !isFirst && !h.AllowSignup {
+		h.err(w, http.StatusForbidden, "sign-up is closed — ask an admin to create your account")
+		return
+	}
 
 	user := &models.User{
 		ID:           uuid.NewString(),
@@ -219,8 +240,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.Store.GetUserByEmail(r.Context(), strings.ToLower(strings.TrimSpace(body.Email)))
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	limitKey := email + "|" + clientIP(r)
+	if h.loginRL.blocked(limitKey) {
+		w.Header().Set("Retry-After", "600")
+		h.err(w, http.StatusTooManyRequests, "too many failed attempts — try again in a few minutes")
+		return
+	}
+
+	user, err := h.Store.GetUserByEmail(r.Context(), email)
 	if err != nil {
+		h.loginRL.fail(limitKey)
 		h.err(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
@@ -231,9 +261,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !h.Auth.CheckPassword(user.PasswordHash, body.Password) {
+		h.loginRL.fail(limitKey)
 		h.err(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
+	h.loginRL.reset(limitKey)
 
 	token, err := h.Auth.SignUser(user.ID, user.Email)
 	if err != nil {
@@ -256,9 +288,18 @@ func (h *Handler) DeviceInit(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusBadRequest, "missing code")
 		return
 	}
+	if len(body.Code) > 32 {
+		h.err(w, http.StatusBadRequest, "invalid code")
+		return
+	}
 	h.initDeviceCodes()
 	h.gcDeviceCodes()
 	h.deviceMu.Lock()
+	if len(h.deviceCodes) >= 1000 {
+		h.deviceMu.Unlock()
+		h.err(w, http.StatusTooManyRequests, "too many pending logins — try again shortly")
+		return
+	}
 	h.deviceCodes[body.Code] = &deviceEntry{expiresAt: time.Now().Add(5 * time.Minute)}
 	h.deviceMu.Unlock()
 	w.WriteHeader(http.StatusOK)
@@ -552,7 +593,7 @@ func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 		if strings.Count(token, ".") == 2 {
 			// JWT path
 			claims, err := h.Auth.ParseUser(token)
-			if err != nil {
+			if err != nil || h.sessionRevoked(r.Context(), claims) {
 				h.err(w, http.StatusUnauthorized, "unauthorized")
 				return
 			}
@@ -567,6 +608,10 @@ func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 			}
 			go h.Store.TouchAPIToken(context.Background(), t.ID)
 			userID = t.UserID
+		}
+		if userID == "" { // never let an anonymous identity reach handlers that treat "" as "everyone"
+			h.err(w, http.StatusUnauthorized, "unauthorized")
+			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyUserID, userID)
 		next.ServeHTTP(w, r.WithContext(ctx))

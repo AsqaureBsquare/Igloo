@@ -74,6 +74,11 @@ func (a *Auth) ParseUser(token string) (*UserClaims, error) {
 	if !ok || !t.Valid {
 		return nil, errors.New("invalid token")
 	}
+	// Connection tokens (agent/forward/proxy) are signed with the same key and
+	// parse into UserClaims with no user_id; they must never pass as a session.
+	if c.UserID == "" {
+		return nil, errors.New("not a user token")
+	}
 	return c, nil
 }
 
@@ -110,6 +115,10 @@ func (a *Auth) ParseConn(token string) (*ConnClaims, error) {
 	c, ok := t.Claims.(*ConnClaims)
 	if !ok || !t.Valid {
 		return nil, errors.New("invalid token")
+	}
+	// A user session token parses into ConnClaims with empty fields; reject it.
+	if c.WorkspaceID == "" || c.Role == "" {
+		return nil, errors.New("not a connection token")
 	}
 	return c, nil
 }

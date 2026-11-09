@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/igloo-dev/igloo/internal/provisiond"
 )
@@ -32,15 +33,35 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	d := provisiond.New(serverURL, psk)
+
+	// First signal: stop taking jobs and let running Terraform finish (up to
+	// IGLOO_DRAIN_TIMEOUT; keep it below the pod's terminationGracePeriodSeconds).
+	// A second signal stops immediately.
+	drainTimeout := 25 * time.Minute
+	if v := os.Getenv("IGLOO_DRAIN_TIMEOUT"); v != "" {
+		if t, err := time.ParseDuration(v); err == nil && t >= 0 {
+			drainTimeout = t
+		}
+	}
 	go func() {
-		sig := make(chan os.Signal, 1)
+		sig := make(chan os.Signal, 2)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
-		log.Println("[provisioner] shutting down...")
+		log.Println("[provisioner] shutting down: finishing running jobs (signal again to stop now)...")
+		go func() {
+			<-sig
+			log.Println("[provisioner] second signal, stopping now")
+			cancel()
+		}()
+		if d.Drain(drainTimeout) {
+			log.Println("[provisioner] drained cleanly")
+		} else {
+			log.Printf("[provisioner] drain timed out after %v, stopping running jobs", drainTimeout)
+		}
 		cancel()
 	}()
 
-	d := provisiond.New(serverURL, psk)
 	d.Start(ctx, concurrency)
 
 	log.Printf("[provisioner] running with %d workers", concurrency)

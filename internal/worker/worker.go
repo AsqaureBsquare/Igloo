@@ -216,6 +216,9 @@ func (w *Worker) launchFargate(ctx context.Context, ws *models.Workspace, tmpl *
 
 	logPath := provisionLogPath(ws.ID)
 	if cur, e := w.Store.GetWorkspace(ctx, ws.ID); e == nil {
+		if cur.Meta == nil {
+			cur.Meta = map[string]string{}
+		}
 		cur.Meta["log_path"] = logPath
 		_ = w.Store.UpdateWorkspace(ctx, cur)
 	}
@@ -237,6 +240,9 @@ func (w *Worker) launchFargate(ctx context.Context, ws *models.Workspace, tmpl *
 
 	if cur, e := w.Store.GetWorkspace(ctx, ws.ID); e == nil {
 		if svc := outputs["service_name"]; svc != "" {
+			if cur.Meta == nil {
+				cur.Meta = map[string]string{}
+			}
 			cur.Meta["service_name"] = svc
 		}
 		_ = w.Store.UpdateWorkspace(ctx, cur)

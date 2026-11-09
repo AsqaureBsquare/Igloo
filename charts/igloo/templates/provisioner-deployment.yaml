@@ -14,10 +14,15 @@ spec:
       labels:
         {{- include "igloo.provisioner.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "igloo.imagePullSecrets" . | nindent 6 }}
+      {{- end }}
       serviceAccountName: {{ include "igloo.provisioner.serviceAccountName" . }}
+      # Give running Terraform time to finish when the pod is stopped or upgraded.
+      terminationGracePeriodSeconds: {{ .Values.provisioner.terminationGracePeriodSeconds }}
       containers:
         - name: provisioner
-          image: "{{ .Values.provisioner.image.repository }}:{{ .Values.provisioner.image.tag }}"
+          image: {{ include "igloo.image" (dict "root" . "image" (printf "%s:%v" .Values.provisioner.image.repository .Values.provisioner.image.tag)) | quote }}
           imagePullPolicy: {{ .Values.provisioner.image.pullPolicy }}
           env:
             - name: AWS_REGION
@@ -31,9 +36,12 @@ spec:
                   key: IGLOO_PROVISIONER_KEY
             - name: IGLOO_WORKER_CONCURRENCY
               value: {{ .Values.provisioner.concurrency | quote }}
+            # Drain a little before Kubernetes force-kills the pod.
+            - name: IGLOO_DRAIN_TIMEOUT
+              value: "{{ sub (int .Values.provisioner.terminationGracePeriodSeconds) 30 }}s"
             # Workspace Fargate infrastructure variables
             - name: IGLOO_WORKSPACE_IMAGE
-              value: {{ .Values.provisioner.workspace.image | quote }}
+              value: {{ if .Values.provisioner.workspace.image }}{{ include "igloo.image" (dict "root" . "image" .Values.provisioner.workspace.image) | quote }}{{ else }}""{{ end }}
             - name: IGLOO_WORKSPACE_NAMESPACE
               value: {{ .Values.provisioner.workspace.namespace | default "workspaces" | quote }}
             - name: IGLOO_ECS_CLUSTER
@@ -48,8 +56,19 @@ spec:
               value: {{ .Values.provisioner.workspace.ecsSecurityGroup | quote }}
             - name: IGLOO_TF_STATE_BUCKET
               value: {{ .Values.provisioner.workspace.tfStateBucket | quote }}
+          {{- if eq .Values.provisioner.workspace.tfStateBucket "local" }}
+          volumeMounts:
+            - name: tf-state
+              mountPath: /var/lib/igloo/state
+          {{- end }}
           resources:
             {{- toYaml .Values.provisioner.resources | nindent 12 }}
+      {{- if eq .Values.provisioner.workspace.tfStateBucket "local" }}
+      volumes:
+        - name: tf-state
+          persistentVolumeClaim:
+            claimName: {{ include "igloo.provisioner.fullname" . }}-state
+      {{- end }}
       {{- with .Values.provisioner.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

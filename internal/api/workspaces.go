@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
+	"github.com/igloo-dev/igloo/internal/guard"
 	"github.com/igloo-dev/igloo/internal/models"
 	"github.com/igloo-dev/igloo/internal/worker"
 )
@@ -50,22 +51,40 @@ func (h *Handler) ListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	h.json(w, http.StatusOK, ws)
 }
 
-// POST /api/workspaces
-func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name       string            `json:"name"`
-		TemplateID string            `json:"template_id"`
-		Vars       map[string]string `json:"vars"`
+// createInput is everything needed to make a workspace.
+type createInput struct {
+	Name       string
+	TemplateID string
+	Vars       map[string]string
+	Guard      *guard.Policy     // nil = not behind the egress gateway
+	Meta       map[string]string // extra metadata (e.g. sandbox marker and expiry)
+}
+
+// createWorkspace checks in, stores a new workspace owned by the caller and queues its
+// provisioning. On failure it returns the HTTP status and message to report.
+func (h *Handler) createWorkspace(r *http.Request, in createInput) (*models.Workspace, int, string) {
+	base, err := h.baseline(r.Context())
+	if err != nil {
+		return nil, http.StatusInternalServerError, "internal error"
 	}
-	if err := h.decode(r, &body); err != nil || body.Name == "" || body.TemplateID == "" {
-		h.err(w, http.StatusBadRequest, "name and template_id are required")
-		return
+	if in.Guard == nil && base.RequireGuard {
+		return nil, http.StatusForbidden, "your organisation requires workspaces to run behind the egress gateway; give a guard policy"
+	}
+	if in.Guard != nil {
+		if err := in.Guard.Validate(); err != nil {
+			return nil, http.StatusBadRequest, err.Error()
+		}
+		if err := base.Check(*in.Guard); err != nil {
+			return nil, http.StatusForbidden, err.Error()
+		}
+		if !h.guardEnabled() {
+			return nil, http.StatusConflict, "the egress gateway is not configured on this server"
+		}
 	}
 
-	tmpl, err := h.Store.GetTemplate(r.Context(), body.TemplateID)
+	tmpl, err := h.Store.GetTemplate(r.Context(), in.TemplateID)
 	if err != nil {
-		h.err(w, http.StatusNotFound, "template not found")
-		return
+		return nil, http.StatusNotFound, "template not found"
 	}
 
 	// Merge defaults then user-supplied vars
@@ -75,29 +94,27 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 			vars[v.Name] = v.Default
 		}
 	}
-	for k, v := range body.Vars {
+	for k, v := range in.Vars {
 		vars[k] = v
 	}
 
 	orgID := ctxOrgID(r)
 	// Enforce template belongs to this org (or is builtin).
 	if orgID != "" && !tmpl.Builtin && tmpl.OrgID != orgID {
-		h.err(w, http.StatusForbidden, "template does not belong to this organization")
-		return
+		return nil, http.StatusForbidden, "template does not belong to this organization"
 	}
 
 	wsID := uuid.NewString()
 	agentToken, err := h.Auth.SignConn(wsID, "agent", 30*24*time.Hour)
 	if err != nil {
-		h.err(w, http.StatusInternalServerError, "internal error")
-		return
+		return nil, http.StatusInternalServerError, "internal error"
 	}
 
 	ws := &models.Workspace{
 		ID:           wsID,
 		OrgID:        orgID,
 		UserID:       ctxUserID(r),
-		Name:         strings.TrimSpace(body.Name),
+		Name:         strings.TrimSpace(in.Name),
 		TemplateID:   tmpl.ID,
 		TemplateName: tmpl.Name,
 		Provider:     tmpl.Provider,
@@ -109,10 +126,15 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		LastActiveAt: time.Now(),
 		Meta:         map[string]string{},
 	}
+	for k, v := range in.Meta {
+		ws.Meta[k] = v
+	}
+	if in.Guard != nil {
+		setPolicy(ws, *in.Guard)
+	}
 
 	if err := h.Store.CreateWorkspace(r.Context(), ws); err != nil {
-		h.err(w, http.StatusInternalServerError, "internal error")
-		return
+		return nil, http.StatusInternalServerError, "internal error"
 	}
 
 	// Auto-start: enqueue the provisioning job immediately.
@@ -121,7 +143,26 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	} else {
 		h.TryImmediateDispatch(r.Context())
 	}
+	return ws, 0, ""
+}
 
+// POST /api/workspaces
+func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string            `json:"name"`
+		TemplateID string            `json:"template_id"`
+		Vars       map[string]string `json:"vars"`
+		Guard      *guard.Policy     `json:"guard"` // optional: run behind the egress gateway with this policy
+	}
+	if err := h.decode(r, &body); err != nil || body.Name == "" || body.TemplateID == "" {
+		h.err(w, http.StatusBadRequest, "name and template_id are required")
+		return
+	}
+	ws, code, msg := h.createWorkspace(r, createInput{Name: body.Name, TemplateID: body.TemplateID, Vars: body.Vars, Guard: body.Guard})
+	if code != 0 {
+		h.err(w, code, msg)
+		return
+	}
 	h.json(w, http.StatusCreated, ws)
 }
 
@@ -153,6 +194,19 @@ func (h *Handler) StartWorkspace(w http.ResponseWriter, r *http.Request) {
 	if ws.Status == models.StatusDeleting {
 		h.err(w, http.StatusConflict, "workspace is being deleted")
 		return
+	}
+	// A workspace made before the baseline required the gateway cannot be moved behind it, so
+	// it stays stopped rather than running outside the organisation's rules.
+	if _, guarded := policyOf(ws); !guarded {
+		base, err := h.baseline(r.Context())
+		if err != nil {
+			h.err(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if base.RequireGuard {
+			h.err(w, http.StatusForbidden, "your organisation requires workspaces to run behind the egress gateway, and this one was created without it; create a new one with a guard policy")
+			return
+		}
 	}
 
 	agentToken, err := h.Auth.SignConn(ws.ID, "agent", 30*24*time.Hour)
@@ -241,43 +295,55 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusNotFound, "workspace not found")
 		return
 	}
-	if ws.Status == models.StatusDeleting {
-		w.WriteHeader(http.StatusNoContent) // already in progress
-		return
-	}
-
-	if ws.Provider == "aws-fargate" || ws.Provider == "kubernetes" {
-		ws.Status = models.StatusDeleting
-		ws.UpdatedAt = time.Now()
-		_ = h.Store.UpdateWorkspace(r.Context(), ws)
-		if err := worker.Enqueue(r.Context(), h.Store, ws.ID, models.JobDestroy); err != nil {
-			log.Printf("[workspace] failed to enqueue destroy job workspace=%s: %v", ws.ID, err)
-		} else {
-			h.TryImmediateDispatch(r.Context())
-		}
-	} else {
-		tmpl, _ := h.Store.GetTemplate(r.Context(), ws.TemplateID)
-		go h.destroyWorkspace(ws, tmpl)
-		_ = h.Store.DeleteWorkspace(r.Context(), ws.ID)
-	}
+	h.beginDelete(r.Context(), ws)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// GET /api/workspaces/{id}/provision-logs — SSE stream of live provisioner output.
-// Accepts token via Authorization header or ?token= query param (EventSource can't set headers).
-func (h *Handler) ProvisionLogs(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		token, _ = strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+// beginDelete starts tearing a workspace down. It is safe to call twice.
+func (h *Handler) beginDelete(ctx context.Context, ws *models.Workspace) {
+	if ws.Status == models.StatusDeleting {
+		return // already in progress
 	}
-	claims, err := h.Auth.ParseUser(token)
-	if err != nil {
-		h.err(w, http.StatusUnauthorized, "unauthorized")
+	if ws.Provider == "aws-fargate" || ws.Provider == "kubernetes" {
+		ws.Status = models.StatusDeleting
+		ws.UpdatedAt = time.Now()
+		_ = h.Store.UpdateWorkspace(ctx, ws)
+		if err := worker.Enqueue(ctx, h.Store, ws.ID, models.JobDestroy); err != nil {
+			log.Printf("[workspace] failed to enqueue destroy job workspace=%s: %v", ws.ID, err)
+		} else {
+			h.TryImmediateDispatch(ctx)
+		}
 		return
 	}
+	tmpl, _ := h.Store.GetTemplate(ctx, ws.TemplateID)
+	go h.destroyWorkspace(ws, tmpl)
+	_ = h.Store.DeleteWorkspace(ctx, ws.ID)
+}
+
+// GET /api/workspaces/{id}/provision-logs — SSE stream of live provisioner output.
+// Auth is either an Authorization header (scripts) or ?ticket=, a 30-second token
+// from /logs-ticket (EventSource can't set headers). Session tokens are not
+// accepted in the query string.
+func (h *Handler) ProvisionLogs(w http.ResponseWriter, r *http.Request) {
 	wsID := chi.URLParam(r, "id")
+	var userID string // set for header auth; a ticket was already scoped to this workspace when issued
+	if ticket := r.URL.Query().Get("ticket"); ticket != "" {
+		claims, err := h.Auth.ParseConn(ticket)
+		if err != nil || claims.Role != logsTicketRole || claims.WorkspaceID != wsID {
+			h.err(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+	} else {
+		bearer, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		claims, err := h.Auth.ParseUser(bearer)
+		if err != nil || h.sessionRevoked(r.Context(), claims) {
+			h.err(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		userID = claims.UserID
+	}
 	ws, err := h.Store.GetWorkspace(r.Context(), wsID)
-	if err != nil || ws.UserID != claims.UserID {
+	if err != nil || (userID != "" && ws.UserID != userID) {
 		h.err(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -356,6 +422,19 @@ func (h *Handler) AgentLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ws.Provider == "kubernetes" {
+		text, err := k8sPodLogs(r.Context(), ws.ID)
+		if err != nil {
+			log.Printf("[agent-logs] kubernetes workspace=%s: %v", ws.ID, err)
+			h.err(w, http.StatusNotFound, "logs not available yet")
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write([]byte(text))
+		return
+	}
+
 	var containerName string
 	switch ws.Provider {
 	case "docker":
@@ -383,7 +462,7 @@ func (h *Handler) AgentLogs(w http.ResponseWriter, r *http.Request) {
 
 // GET /ws
 func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
+	token := connToken(r)
 	claims, err := h.Auth.ParseConn(token)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -394,26 +473,37 @@ func (h *Handler) WebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	if claims.Role == "agent" {
+		conn.SetReadLimit(maxAgentFrame)
+	} else {
+		conn.SetReadLimit(maxBrowserFrame)
+	}
 
 	connID := uuid.NewString()
 	ctx := context.Background()
 
 	switch claims.Role {
 	case "agent":
-		if cur, e := h.Store.GetWorkspace(ctx, claims.WorkspaceID); e == nil {
-			// Don't overwrite deleting status — agent may still be alive during terraform destroy
-			if cur.Status != models.StatusDeleting {
-				cur.Status = models.StatusRunning
+		h.Relay.RegisterAgentNotify(claims.WorkspaceID, connID, conn, func() {
+			// Flip to running only now that the relay can reach the agent.
+			if cur, e := h.Store.GetWorkspace(ctx, claims.WorkspaceID); e == nil {
+				// Don't overwrite deleting status — agent may still be alive during terraform destroy
+				if cur.Status != models.StatusDeleting {
+					cur.Status = models.StatusRunning
+					cur.UpdatedAt = time.Now()
+					cur.LastActiveAt = time.Now()
+					_ = h.Store.UpdateWorkspace(ctx, cur)
+				}
+			}
+		})
+		// This connection ended. Mark the workspace asleep only if no agent is left:
+		// after a network blip the new connection registers before the old one closes.
+		if !h.Relay.AgentConnected(claims.WorkspaceID) {
+			if cur, e := h.Store.GetWorkspace(ctx, claims.WorkspaceID); e == nil && cur.Status == models.StatusRunning {
+				cur.Status = models.StatusSleeping
 				cur.UpdatedAt = time.Now()
-				cur.LastActiveAt = time.Now()
 				_ = h.Store.UpdateWorkspace(ctx, cur)
 			}
-		}
-		h.Relay.RegisterAgent(claims.WorkspaceID, connID, conn)
-		if cur, e := h.Store.GetWorkspace(ctx, claims.WorkspaceID); e == nil && cur.Status == models.StatusRunning {
-			cur.Status = models.StatusSleeping
-			cur.UpdatedAt = time.Now()
-			_ = h.Store.UpdateWorkspace(ctx, cur)
 		}
 
 	case "browser":
@@ -497,6 +587,9 @@ func (h *Handler) launchDocker(ws *models.Workspace, serverURL string) error {
 
 	containerID := strings.TrimSpace(string(out))
 	if cur, e := h.Store.GetWorkspace(context.Background(), ws.ID); e == nil {
+		if cur.Meta == nil {
+			cur.Meta = map[string]string{}
+		}
 		cur.Meta["container_id"] = containerID
 		_ = h.Store.UpdateWorkspace(context.Background(), cur)
 	}
@@ -543,6 +636,9 @@ func (h *Handler) launchTerraform(ws *models.Workspace, serverURL, templateName 
 
 	logPath := filepath.Join(wsDir, "terraform.log")
 	if cur, e := h.Store.GetWorkspace(context.Background(), ws.ID); e == nil {
+		if cur.Meta == nil {
+			cur.Meta = map[string]string{}
+		}
 		cur.Meta["tf_dir"] = wsDir
 		cur.Meta["log_path"] = logPath
 		_ = h.Store.UpdateWorkspace(context.Background(), cur)
@@ -613,6 +709,15 @@ func (h *Handler) WorkspaceLogs(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Write([]byte(buf.String()))
+		return
+	}
+
+	// Daemon-provisioned workspaces stream Terraform output to the server, which
+	// buffers it in memory; there is no log file on this host.
+	if lines := h.LogBuf.Snapshot(ws.ID); len(lines) > 0 {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write([]byte(strings.Join(lines, "\n") + "\n"))
 		return
 	}
 

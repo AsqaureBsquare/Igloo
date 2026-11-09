@@ -2,11 +2,12 @@
 // server via WebSocket and executes Terraform to provision/deprovision workspaces.
 //
 // Protocol (demand-driven, zero polling):
-//   daemon → server: {"type":"acquire"}          — "I have a free worker slot"
-//   server → daemon: {"type":"job", "job":...}   — here's work (instant, no delay)
-//   daemon → server: {"type":"ping","job_id":"..."} — heartbeat while running
-//   daemon → server: {"type":"done","job_id":"...","outputs":{...}}
-//   daemon → server: {"type":"fail","job_id":"...","error":"..."}
+//
+//	daemon → server: {"type":"acquire"}          — "I have a free worker slot"
+//	server → daemon: {"type":"job", "job":...}   — here's work (instant, no delay)
+//	daemon → server: {"type":"ping","job_id":"..."} — heartbeat while running
+//	daemon → server: {"type":"done","job_id":"...","outputs":{...}}
+//	daemon → server: {"type":"fail","job_id":"...","error":"..."}
 package provisiond
 
 import (
@@ -25,20 +26,65 @@ import (
 	"github.com/igloo-dev/igloo/internal/provisioner"
 )
 
+// runner executes Terraform; provisioner.Run in production, a fake in tests.
+type runner func(ctx context.Context, in provisioner.Input, action provisioner.Action) (map[string]string, error)
+
 // Daemon connects to the igloo server over a single persistent WebSocket and
 // runs up to concurrency Terraform jobs in parallel.
+//
+// Jobs belong to the daemon, not to a connection: a dropped WebSocket (network
+// blip, server rollout) must not kill a running `terraform apply`. Results and
+// slot requests go to whichever connection is current, and results produced
+// while disconnected are held until the next one.
 type Daemon struct {
 	ServerURL string
 	Token     string
 	ID        string
 	inFlight  sync.Map // workspace_id → struct{}
+
+	run         runner
+	initBackoff time.Duration
+	deferDelay  time.Duration // pause before asking for work again after deferring a job
+
+	mu       sync.Mutex
+	cur      *session // nil while disconnected
+	running  int      // jobs executing right now, across connections
+	pending  []wsMsg  // done/fail results waiting for a connection
+	draining bool     // shutting down: take no new work, let running jobs finish
+}
+
+// session is one live WebSocket connection.
+type session struct {
+	send chan wsMsg
+	ctx  context.Context
+	kick func() // closes the underlying connection
 }
 
 func New(serverURL, token string) *Daemon {
 	return &Daemon{
-		ServerURL: serverURL,
-		Token:     token,
-		ID:        uuid.NewString(),
+		ServerURL:   serverURL,
+		Token:       token,
+		ID:          uuid.NewString(),
+		run:         provisioner.Run,
+		initBackoff: time.Second,
+		deferDelay:  2 * time.Second,
+	}
+}
+
+// emit hands msg to the current connection without blocking. A reliable message
+// (a job result) that can't be delivered now is kept for the next connection.
+func (d *Daemon) emit(msg wsMsg, reliable bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cur != nil && d.cur.ctx.Err() == nil {
+		select {
+		case d.cur.send <- msg:
+			return
+		default:
+		}
+	}
+	if reliable {
+		d.pending = append(d.pending, msg)
 	}
 }
 
@@ -69,6 +115,41 @@ type claimResponse struct {
 	StateRegion   string            `json:"state_region"`
 }
 
+// Drain prepares for shutdown: it stops asking for work, lets running jobs finish
+// and delivers their results, waiting up to timeout. It reports whether everything
+// finished and was delivered; the caller then cancels the Start context, which
+// stops anything still running.
+//
+// The server remembers every free slot the daemon announced and keeps assigning
+// jobs to them, so draining also drops the connection: the daemon reconnects
+// without announcing any slots, and the server forgets the old ones.
+func (d *Daemon) Drain(timeout time.Duration) bool {
+	d.mu.Lock()
+	d.draining = true
+	cur, running := d.cur, d.running
+	d.mu.Unlock()
+	if running == 0 {
+		return true
+	}
+	log.Printf("[provisiond] draining: waiting up to %v for %d running job(s)", timeout, running)
+	if cur != nil {
+		cur.kick()
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		d.mu.Lock()
+		idle := d.running == 0 && len(d.pending) == 0 && (d.cur == nil || len(d.cur.send) == 0)
+		d.mu.Unlock()
+		if idle {
+			time.Sleep(200 * time.Millisecond) // let the writer put the last message on the wire
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
 // Start connects to the server and maintains the connection until ctx is cancelled.
 func (d *Daemon) Start(ctx context.Context, concurrency int) {
 	log.Printf("[provisiond] daemon %s starting (%d slots, server=%s)", d.ID, concurrency, d.ServerURL)
@@ -76,11 +157,16 @@ func (d *Daemon) Start(ctx context.Context, concurrency int) {
 }
 
 func (d *Daemon) connectLoop(ctx context.Context, concurrency int) {
-	backoff := time.Second
+	backoff := d.initBackoff
 	for {
+		started := time.Now()
 		err := d.runConnection(ctx, concurrency)
 		if ctx.Err() != nil {
 			return
+		}
+		// A connection that stayed up for a while was healthy: don't carry old failures forward.
+		if time.Since(started) > 30*time.Second {
+			backoff = d.initBackoff
 		}
 		log.Printf("[provisiond] disconnected (%v), reconnecting in %v", err, backoff)
 		select {
@@ -103,30 +189,49 @@ func (d *Daemon) runConnection(ctx context.Context, concurrency int) error {
 	}
 	u.Path = "/api/provisioner/ws"
 	q := u.Query()
-	q.Set("token", d.Token)
 	q.Set("id", d.ID)
 	u.RawQuery = q.Encode()
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), http.Header{})
+	// The provisioner key is the most powerful credential in the system (it can
+	// claim any tenant's job): keep it out of the URL, where proxies and access
+	// logs record it.
+	hdr := http.Header{"Authorization": {"Bearer " + d.Token}}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), hdr)
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
 	defer conn.Close()
 	log.Printf("[provisiond] connected to %s", d.ServerURL)
 
-	// sendCh is the single writer for the connection.
-	sendCh := make(chan wsMsg, concurrency*2)
 	connCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s := &session{send: make(chan wsMsg, 256), ctx: connCtx, kick: func() { conn.Close() }}
 
-	// Write loop
+	// Make this the current connection: replay results held while disconnected and
+	// ask only for the slots not already occupied by jobs that survived the drop.
+	d.mu.Lock()
+	d.cur = s
+	for _, m := range d.pending {
+		s.send <- m
+	}
+	d.pending = nil
+	for i := d.running; i < concurrency && !d.draining; i++ {
+		s.send <- wsMsg{Type: "acquire"}
+	}
+	d.mu.Unlock()
+	defer func() {
+		d.mu.Lock()
+		if d.cur == s {
+			d.cur = nil
+		}
+		d.mu.Unlock()
+	}()
+
+	// Single writer for the connection.
 	go func() {
 		for {
 			select {
-			case msg, ok := <-sendCh:
-				if !ok {
-					return
-				}
+			case msg := <-s.send:
 				if err := conn.WriteJSON(msg); err != nil {
 					cancel()
 					return
@@ -136,11 +241,6 @@ func (d *Daemon) runConnection(ctx context.Context, concurrency int) error {
 			}
 		}
 	}()
-
-	// Signal all available worker slots — server will push jobs immediately.
-	for i := 0; i < concurrency; i++ {
-		sendCh <- wsMsg{Type: "acquire"}
-	}
 
 	// Read loop
 	for {
@@ -158,25 +258,37 @@ func (d *Daemon) runConnection(ctx context.Context, concurrency int) error {
 			if msg.Job == nil {
 				continue
 			}
-			job := msg.Job
-			go func() {
-				d.runJob(connCtx, job, sendCh)
-				// Worker slot free — ask for the next job
-				select {
-				case sendCh <- wsMsg{Type: "acquire"}:
-				case <-connCtx.Done():
-				}
-			}()
+			d.mu.Lock()
+			d.running++
+			d.mu.Unlock()
+			// Terraform runs on the daemon's context, not this connection's.
+			go d.runJob(ctx, msg.Job)
 		case "ping":
 			// server keepalive — no action needed
 		}
 	}
 }
 
-func (d *Daemon) runJob(ctx context.Context, job *claimResponse, sendCh chan<- wsMsg) {
+// runJob executes one job and reports on whichever connection is current when it finishes.
+func (d *Daemon) runJob(ctx context.Context, job *claimResponse) {
+	defer func() {
+		// Worker slot free — ask for the next job on the current connection (if
+		// we're disconnected the next connect computes the free slots itself).
+		d.mu.Lock()
+		d.running--
+		draining := d.draining
+		d.mu.Unlock()
+		if !draining {
+			d.emit(wsMsg{Type: "acquire"}, false)
+		}
+	}()
+
 	// Per-workspace lock prevents two slots running terraform on the same workspace simultaneously.
 	if _, loaded := d.inFlight.LoadOrStore(job.WorkspaceID, struct{}{}); loaded {
-		sendCh <- wsMsg{Type: "fail", JobID: job.JobID, Error: "workspace already being provisioned"}
+		// Not a failure: hand the job back to the queue (no retry used) and wait a
+		// moment before taking work again, or the same job returns instantly.
+		d.emit(wsMsg{Type: "defer", JobID: job.JobID}, true)
+		time.Sleep(d.deferDelay)
 		return
 	}
 	defer d.inFlight.Delete(job.WorkspaceID)
@@ -192,10 +304,7 @@ func (d *Daemon) runJob(ctx context.Context, job *claimResponse, sendCh chan<- w
 		for {
 			select {
 			case <-t.C:
-				select {
-				case sendCh <- wsMsg{Type: "ping", JobID: job.JobID}:
-				default:
-				}
+				d.emit(wsMsg{Type: "ping", JobID: job.JobID}, false)
 			case <-hbCtx.Done():
 				return
 			}
@@ -203,10 +312,7 @@ func (d *Daemon) runJob(ctx context.Context, job *claimResponse, sendCh chan<- w
 	}()
 
 	logFunc := func(line string) {
-		select {
-		case sendCh <- wsMsg{Type: "log", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Line: line}:
-		default:
-		}
+		d.emit(wsMsg{Type: "log", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Line: line}, false)
 	}
 
 	outputs, err := d.terraform(ctx, job, logFunc)
@@ -214,18 +320,11 @@ func (d *Daemon) runJob(ctx context.Context, job *claimResponse, sendCh chan<- w
 
 	if err != nil {
 		log.Printf("[provisiond] job=%s failed: %v", job.JobID, err)
-		select {
-		case sendCh <- wsMsg{Type: "fail", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Error: err.Error()}:
-		case <-ctx.Done():
-		}
+		d.emit(wsMsg{Type: "fail", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Error: err.Error()}, true)
 		return
 	}
-
-	select {
-	case sendCh <- wsMsg{Type: "done", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Outputs: outputs}:
-		log.Printf("[provisiond] job=%s done", job.JobID)
-	case <-ctx.Done():
-	}
+	log.Printf("[provisiond] job=%s done", job.JobID)
+	d.emit(wsMsg{Type: "done", JobID: job.JobID, WorkspaceID: job.WorkspaceID, Outputs: outputs}, true)
 }
 
 func (d *Daemon) terraform(ctx context.Context, job *claimResponse, logFunc func(string)) (map[string]string, error) {
@@ -251,7 +350,7 @@ func (d *Daemon) terraform(ctx context.Context, job *claimResponse, logFunc func
 		return nil, fmt.Errorf("unknown action: %s", job.Action)
 	}
 
-	return provisioner.Run(ctx, provisioner.Input{
+	return d.run(ctx, provisioner.Input{
 		WorkspaceID: job.WorkspaceID,
 		Files:       job.Files,
 		Vars:        d.buildVars(job, desiredCount),

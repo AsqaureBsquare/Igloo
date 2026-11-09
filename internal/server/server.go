@@ -66,22 +66,33 @@ func New(st store.Store, a *auth.Auth) *Server {
 		}
 	}
 	h.DisablePasswordAuth = os.Getenv("IGLOO_DISABLE_PASSWORD_AUTH") == "true"
+	h.AllowSignup = os.Getenv("IGLOO_ALLOW_SIGNUP") == "true"
+	h.GuardKey = os.Getenv("IGLOO_GUARD_KEY")
+	h.GuardProxyURL = os.Getenv("IGLOO_GUARD_PROXY_URL")
+	h.SandboxImage = os.Getenv("IGLOO_SANDBOX_IMAGE")
 	if raw := os.Getenv("IGLOO_OIDC_ALLOWED_GROUPS"); raw != "" {
 		h.AllowedGroups = strings.Fields(strings.ReplaceAll(raw, ",", " "))
 	}
 
+	ui, uiDev := staticFS()
+
 	r := chi.NewRouter()
+	r.Use(redactLogURI) // keep ?token= and similar credentials out of the access log
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Compress(5))
-	r.Use(cors)
+	r.Use(corsMiddleware(parseOrigins(os.Getenv("IGLOO_CORS_ORIGINS"))))
 
 	// ─── Public routes ────────────────────────────────────────────────────────
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 	r.Get("/downloads/{binary}", h.DownloadAgent)
 	r.Get("/cli-auth", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		f, _ := uiFS.Open("static/cli-auth.html")
+		f, err := ui.Open("cli-auth.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
 		defer f.Close()
 		io.Copy(w, f)
 	})
@@ -102,6 +113,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Use(h.RequireAuth)
 
 		r.Get("/api/auth/me", h.Me)
+		r.Post("/api/auth/password", h.ChangePassword)
 		r.Put("/api/auth/me/tailscale-key", h.UpdateTailscaleKey)
 
 		// API tokens (Coder-style service account tokens)
@@ -127,6 +139,19 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Get("/api/workspaces/{id}/network", h.GetNetworkMap)
 			r.Get("/api/workspaces/{id}/vscode-token", h.VScodeToken)
 			r.Get("/api/workspaces/{id}/forward-token", h.ForwardToken)
+			r.Get("/api/workspaces/{id}/logs-ticket", h.LogsTicket)
+			r.Get("/api/workspaces/{id}/activity", h.WorkspaceActivity)
+
+			// Sandboxes: workspaces made for code, driven through a small API.
+			r.Post("/api/sandboxes", h.CreateSandbox)
+			r.Get("/api/sandboxes/{id}", h.GetWorkspace)
+			r.Delete("/api/sandboxes/{id}", h.DeleteWorkspace)
+			r.Post("/api/sandboxes/{id}/exec", h.SandboxExec)
+			r.Get("/api/sandboxes/{id}/files", h.SandboxReadFile)
+			r.Put("/api/sandboxes/{id}/files", h.SandboxWriteFile)
+			r.Get("/api/guard-baseline", h.GetGuardBaseline)
+			r.Get("/api/workspaces/{id}/guard-policy", h.GetGuardPolicy)
+			r.Put("/api/workspaces/{id}/guard-policy", h.PutGuardPolicy)
 
 			r.Get("/api/templates", h.ListTemplates)
 			r.Get("/api/templates/{id}", h.GetTemplate)
@@ -160,6 +185,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Get("/api/admin/users", h.AdminListUsers)
 			r.Post("/api/admin/users", h.AdminCreateUser)
 			r.Put("/api/admin/users/{id}", h.AdminUpdateUser)
+			r.Put("/api/admin/users/{id}/password", h.AdminResetPassword)
 			r.Delete("/api/admin/users/{id}", h.AdminDeleteUser)
 			r.Get("/api/admin/workspaces", h.AdminListWorkspaces)
 			r.Post("/api/admin/provisioner-keys", h.CreateProvisionerKey)
@@ -167,6 +193,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 			r.Delete("/api/admin/provisioner-keys/{id}", h.DeleteProvisionerKey)
 			r.Get("/api/admin/platform-config", h.GetPlatformConfig)
 			r.Put("/api/admin/platform-config", h.SavePlatformConfig)
+			r.Put("/api/admin/guard-baseline", h.PutGuardBaseline)
 		})
 	})
 
@@ -181,7 +208,14 @@ func New(st store.Store, a *auth.Auth) *Server {
 		r.Post("/api/provisioner/jobs/{id}/fail", h.JobFail)
 	})
 
-	// SSE log stream — token via ?token= query param (EventSource can't set headers)
+	// Egress gateway API (guard-key authenticated): who a token is, and the audit trail.
+	r.Group(func(r chi.Router) {
+		r.Use(h.GuardAuth)
+		r.Post("/api/guard/authorize", h.GuardAuthorize)
+		r.Post("/api/guard/events", h.GuardEvents)
+	})
+
+	// SSE log stream — short-lived ?ticket= from /logs-ticket (EventSource can't set headers)
 	r.Get("/api/workspaces/{id}/provision-logs", h.ProvisionLogs)
 
 	// Built-in WireGuard coordination — token auth via ?token= query param
@@ -199,11 +233,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 	})
 
 	// ─── Embedded UI (catch-all) ──────────────────────────────────────────────
-	uiSub, err := fs.Sub(uiFS, "static")
-	if err != nil {
-		panic(err)
-	}
-	r.Handle("/*", spaHandler(uiSub))
+	r.Handle("/*", spaHandler(ui, uiDev))
 
 	return &Server{handler: h, router: r}
 }
@@ -300,6 +330,7 @@ func (s *Server) StartWorker(ctx context.Context) {
 	// Dispatch loop runs in all modes — picks up pending jobs when a provisioner
 	// reconnects after a server restart or transient DynamoDB GSI consistency lag.
 	s.handler.Registry.StartDispatchLoop(ctx, s.handler)
+	s.handler.StartSandboxJanitor(ctx, 30*time.Second)
 
 	if os.Getenv("IGLOO_DAEMON_MODE") == "true" {
 		// External provisioner daemon handles jobs; server only watches for dead daemons.
@@ -353,24 +384,65 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.router.ServeHTTP(w, r)
 }
 
-// cors adds permissive CORS headers for local development.
-func cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Org-ID")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
+// parseOrigins turns a comma-separated list into a set. Empty means same-origin only.
+func parseOrigins(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, o := range strings.Split(raw, ",") {
+		if o = strings.TrimSpace(o); o != "" {
+			out[o] = true
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	return out
+}
+
+// corsMiddleware allows cross-origin browser calls only from listed origins
+// (IGLOO_CORS_ORIGINS, or "*" to allow any). The bundled UI is same-origin and
+// the CLI is not a browser, so the default is to send no CORS headers at all.
+func corsMiddleware(allowed map[string]bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if origin := r.Header.Get("Origin"); origin != "" && (allowed["*"] || allowed[origin]) {
+				if allowed["*"] {
+					w.Header().Set("Access-Control-Allow-Origin", "*")
+				} else {
+					w.Header().Set("Access-Control-Allow-Origin", origin)
+					w.Header().Add("Vary", "Origin")
+				}
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Org-ID")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			}
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// staticFS returns the UI files. When IGLOO_UI_DIR is set the UI is served from
+// that directory on disk (edits show up on refresh, no rebuild); otherwise the
+// copy embedded in the binary is used.
+func staticFS() (fs.FS, bool) {
+	if dir := os.Getenv("IGLOO_UI_DIR"); dir != "" {
+		log.Printf("[server] serving UI from %s (live reload mode)", dir)
+		return os.DirFS(dir), true
+	}
+	sub, err := fs.Sub(uiFS, "static")
+	if err != nil {
+		panic(err)
+	}
+	return sub, false
 }
 
 // spaHandler serves static files and falls back to index.html for SPA client-side routing.
-func spaHandler(static fs.FS) http.Handler {
+// With noCache set, browsers always revalidate (used in live reload mode).
+func spaHandler(static fs.FS, noCache bool) http.Handler {
 	fileServer := http.FileServer(http.FS(static))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if noCache {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path == "" {
 			path = "index.html"

@@ -123,11 +123,13 @@ func (h *Handler) RevokeToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// POST /api/admin/users — create a headless service-account user.
+// POST /api/admin/users — create a user. With a password it is a person who can sign in; without
+// one it is a headless service account.
 func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string `json:"name"`
 		Email     string `json:"email"`
+		Password  string `json:"password"`   // optional: makes this a user who signs in with a password
 		LoginType string `json:"login_type"` // "none" for headless
 	}
 	if err := h.decode(r, &body); err != nil {
@@ -139,16 +141,33 @@ func (h *Handler) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	loginType := strings.ToLower(body.LoginType)
-	if loginType == "" {
+	var hash string
+	if body.Password != "" {
+		if loginType != "" && loginType != "password" {
+			h.err(w, http.StatusBadRequest, "a password can only be set on an account that signs in with one")
+			return
+		}
+		if err := validNewPassword(body.Password); err != nil {
+			h.err(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		var err error
+		if hash, err = h.Auth.HashPassword(body.Password); err != nil {
+			h.err(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		loginType = "" // the same as a user who registered themselves
+	} else if loginType == "" {
 		loginType = "none"
 	}
 
 	user := &models.User{
-		ID:        uuid.NewString(),
-		Email:     strings.ToLower(strings.TrimSpace(body.Email)),
-		Name:      strings.TrimSpace(body.Name),
-		LoginType: loginType,
-		CreatedAt: time.Now(),
+		ID:           uuid.NewString(),
+		Email:        strings.ToLower(strings.TrimSpace(body.Email)),
+		Name:         strings.TrimSpace(body.Name),
+		PasswordHash: hash,
+		LoginType:    loginType,
+		CreatedAt:    time.Now(),
 	}
 
 	if err := h.Store.CreateUser(r.Context(), user); err != nil {

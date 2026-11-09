@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -44,10 +45,10 @@ func Connect(serverURL, wsID, token, role string) (*Node, error) {
 	}
 	q := u.Query()
 	q.Set("role", role)
-	q.Set("token", token)
 	u.RawQuery = q.Encode()
 
-	ws, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	// Credentials go in a header, not the URL (proxies and access logs record URLs).
+	ws, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Authorization": {"Bearer " + token}})
 	if err != nil {
 		return nil, fmt.Errorf("dial coordinator: %w", err)
 	}

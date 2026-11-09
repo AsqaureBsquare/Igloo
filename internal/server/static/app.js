@@ -21,6 +21,11 @@ const api = (() => {
       login:    (email, password)        => req('POST', '/api/auth/login',    { email, password }),
       me:       ()                       => req('GET',  '/api/auth/me'),
       saveTailscaleKey: (key)  => req('PUT', '/api/auth/me/tailscale-key', { tailscale_auth_key: key }),
+      changePassword:   (current_password, new_password) => req('POST', '/api/auth/password', { current_password, new_password }),
+    },
+    guardBaseline: {
+      get:  ()     => req('GET', '/api/guard-baseline'),
+      save: (body) => req('PUT', '/api/admin/guard-baseline', body),
     },
     platformConfig: {
       get:  ()     => req('GET', '/api/admin/platform-config'),
@@ -28,12 +33,15 @@ const api = (() => {
     },
     workspaces: {
       list:     ()             => req('GET',    '/api/workspaces'),
-      create:   (name, tplId, vars) => req('POST',   '/api/workspaces', { name, template_id: tplId, vars: vars || {} }),
+      create:   (name, tplId, vars, guard) => req('POST',   '/api/workspaces', { name, template_id: tplId, vars: vars || {}, ...(guard ? { guard } : {}) }),
       get:      (id)           => req('GET',    `/api/workspaces/${id}`),
       start:    (id)           => req('POST',   `/api/workspaces/${id}/start`),
       stop:     (id)           => req('POST',   `/api/workspaces/${id}/stop`),
       del:      (id)           => req('DELETE', `/api/workspaces/${id}`),
       terminal: (id)           => req('GET',    `/api/workspaces/${id}/terminal`),
+      logsTicket: (id)         => req('GET',    `/api/workspaces/${id}/logs-ticket`),
+      activity: (id)           => req('GET',    `/api/workspaces/${id}/activity?limit=100`),
+      guardPolicy: (id)        => req('GET',    `/api/workspaces/${id}/guard-policy`),
       vsCodeToken: (id)        => req('GET',    `/api/workspaces/${id}/vscode-token`),
     },
     templates: {
@@ -46,6 +54,8 @@ const api = (() => {
       listUsers:       ()          => req('GET',    '/api/admin/users'),
       updateUser:      (id, body)  => req('PUT',    `/api/admin/users/${id}`, body),
       deleteUser:      (id)        => req('DELETE', `/api/admin/users/${id}`),
+      createUser:      (body)      => req('POST',   '/api/admin/users', body),
+      resetPassword:   (id, new_password) => req('PUT', `/api/admin/users/${id}/password`, { new_password }),
       listWorkspaces:  (q)         => req('GET',    `/api/admin/workspaces${q ? '?q='+encodeURIComponent(q) : ''}`),
     },
     orgs: {
@@ -105,12 +115,17 @@ function startLatencyPolling() {
 const provLog = {
   lines:   {},   // workspaceID → string[]
   sources: {},   // workspaceID → EventSource
+  pending: {},   // workspaceID → true while a ticket is being fetched
 
-  connect(wsID) {
-    if (this.sources[wsID]) return;
+  async connect(wsID) {
+    if (this.sources[wsID] || this.pending[wsID]) return;
     if (!this.lines[wsID]) this.lines[wsID] = [];
-    const token = localStorage.getItem('igloo_token');
-    const es = new EventSource(`/api/workspaces/${wsID}/provision-logs?token=${token}`);
+    this.pending[wsID] = true;
+    let ticket;
+    try { ({ ticket } = await api.workspaces.logsTicket(wsID)); }
+    catch { return; }
+    finally { delete this.pending[wsID]; }
+    const es = new EventSource(`/api/workspaces/${wsID}/provision-logs?ticket=${encodeURIComponent(ticket)}`);
     this.sources[wsID] = es;
     es.onmessage = (e) => {
       if (!this.lines[wsID]) this.lines[wsID] = [];
@@ -180,10 +195,10 @@ const term = (() => {
       fontFamily: "'JetBrains Mono', 'Cascadia Code', monospace",
       fontSize: 13,
       theme: {
-        background: '#020c18', foreground: '#c8e8ff', cursor: '#00d4ff',
-        black: '#071828', red: '#ff3d6b', green: '#00ffb3', yellow: '#ffc400',
-        blue: '#00d4ff', magenta: '#9d5cff', cyan: '#00e5cc', white: '#c8e8ff',
-        brightBlack: '#1c3550',
+        background: '#0e1b28', foreground: '#c9dde8', cursor: '#8ad1f0',
+        black: '#16293a', red: '#ef4444', green: '#22c55e', yellow: '#ffc400',
+        blue: '#8ad1f0', magenta: '#a78bfa', cyan: '#8ad1f0', white: '#c9dde8',
+        brightBlack: '#22394d',
       },
     });
     fit = new FitAddon.FitAddon();
@@ -262,45 +277,45 @@ function buildingAnimation() {
   return `<div class="igloo-anim-wrap">
   <svg class="igloo-build-svg" viewBox="0 0 200 90" xmlns="http://www.w3.org/2000/svg">
     <!-- Ground shadow -->
-    <ellipse cx="100" cy="84" rx="85" ry="5" fill="#041220" opacity="0.6"/>
+    <ellipse cx="100" cy="84" rx="85" ry="5" fill="#0e1b28" opacity="0.6"/>
 
     <!-- Igloo structure — blocks appear one by one -->
     <!-- Row 1: base (5 blocks) -->
-    <rect class="blk blk-1"  x="82"  y="63" width="16" height="12" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-2"  x="100" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-3"  x="118" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-4"  x="136" y="65" width="14" height="10" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.6"/>
-    <rect class="blk blk-1"  x="79"  y="66" width="11" height="9"  rx="2"   fill="none" stroke="#00d4ff" stroke-width="1"   opacity="0.5"/>
+    <rect class="blk blk-1"  x="82"  y="63" width="16" height="12" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-2"  x="100" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-3"  x="118" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-4"  x="136" y="65" width="14" height="10" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.6"/>
+    <rect class="blk blk-1"  x="79"  y="66" width="11" height="9"  rx="2"   fill="none" stroke="#8ad1f0" stroke-width="1"   opacity="0.5"/>
     <!-- Row 2 -->
-    <rect class="blk blk-5"  x="86"  y="51" width="15" height="11" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-6"  x="103" y="51" width="15" height="11" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-7"  x="120" y="52" width="14" height="10" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.6"/>
-    <rect class="blk blk-8"  x="134" y="55" width="11" height="9"  rx="2"   fill="none" stroke="#00d4ff" stroke-width="1"   opacity="0.5"/>
+    <rect class="blk blk-5"  x="86"  y="51" width="15" height="11" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-6"  x="103" y="51" width="15" height="11" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-7"  x="120" y="52" width="14" height="10" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.6"/>
+    <rect class="blk blk-8"  x="134" y="55" width="11" height="9"  rx="2"   fill="none" stroke="#8ad1f0" stroke-width="1"   opacity="0.5"/>
     <!-- Row 3 -->
-    <rect class="blk blk-9"  x="91"  y="40" width="14" height="10" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-10" x="107" y="40" width="14" height="10" rx="2.5" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
-    <rect class="blk blk-11" x="123" y="42" width="12" height="9"  rx="2"   fill="none" stroke="#00d4ff" stroke-width="1"   opacity="0.6"/>
+    <rect class="blk blk-9"  x="91"  y="40" width="14" height="10" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-10" x="107" y="40" width="14" height="10" rx="2.5" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
+    <rect class="blk blk-11" x="123" y="42" width="12" height="9"  rx="2"   fill="none" stroke="#8ad1f0" stroke-width="1"   opacity="0.6"/>
     <!-- Cap -->
-    <ellipse class="blk blk-12" cx="110" cy="36" rx="11" ry="6" fill="none" stroke="#00d4ff" stroke-width="1.2" opacity="0.7"/>
+    <ellipse class="blk blk-12" cx="110" cy="36" rx="11" ry="6" fill="none" stroke="#8ad1f0" stroke-width="1.2" opacity="0.7"/>
 
     <!-- Door -->
-    <path class="blk blk-1" d="M96 75 Q96 68 101 68 Q106 68 106 75" fill="#020c18" stroke="#00d4ff" stroke-width="1" opacity="0.6"/>
+    <path class="blk blk-1" d="M96 75 Q96 68 101 68 Q106 68 106 75" fill="#0e1b28" stroke="#8ad1f0" stroke-width="1" opacity="0.6"/>
 
     <!-- Igloo glow fill (subtle) -->
-    <path class="blk blk-12" d="M82 75 Q82 34 110 34 Q138 34 138 75 Z" fill="rgba(0,212,255,0.03)" stroke="none"/>
+    <path class="blk blk-12" d="M82 75 Q82 34 110 34 Q138 34 138 75 Z" fill="rgba(138,209,240,0.03)" stroke="none"/>
 
     <!-- Eskimo body -->
     <g class="eskimo">
       <!-- Coat body -->
-      <ellipse cx="36" cy="68" rx="16" ry="17" fill="#0d4a8a"/>
+      <ellipse cx="36" cy="68" rx="16" ry="17" fill="#1f5f80"/>
       <!-- Fur trim -->
-      <ellipse cx="36" cy="82" rx="14" ry="4" fill="#1a6dc0" opacity="0.7"/>
+      <ellipse cx="36" cy="82" rx="14" ry="4" fill="#5bb6dd" opacity="0.7"/>
       <!-- Hood -->
-      <circle cx="36" cy="46" r="13" fill="#0d4a8a"/>
+      <circle cx="36" cy="46" r="13" fill="#1f5f80"/>
       <!-- Face -->
       <circle cx="36" cy="46" r="9"  fill="#e8c09a"/>
       <!-- Hood rim (fur) -->
-      <path d="M26 44 Q36 36 46 44" fill="#1a6dc0" stroke="none" opacity="0.8"/>
+      <path d="M26 44 Q36 36 46 44" fill="#5bb6dd" stroke="none" opacity="0.8"/>
       <!-- Eyes (happy) -->
       <circle cx="32.5" cy="44" r="1.8" fill="#1a0800"/>
       <circle cx="39.5" cy="44" r="1.8" fill="#1a0800"/>
@@ -314,24 +329,24 @@ function buildingAnimation() {
       <circle cx="43" cy="48" r="3" fill="#ff9999" opacity="0.25"/>
       <!-- Arm (animated, swinging to place block) -->
       <g class="eskimo-arm">
-        <rect x="50" y="54" width="22" height="8" rx="4" fill="#0d4a8a"/>
+        <rect x="50" y="54" width="22" height="8" rx="4" fill="#1f5f80"/>
         <!-- Block in hand -->
-        <rect x="70" y="48" width="13" height="9" rx="2" fill="#00d4ff" opacity="0.9" stroke="#00d4ff" stroke-width="0.8"/>
+        <rect x="70" y="48" width="13" height="9" rx="2" fill="#8ad1f0" opacity="0.9" stroke="#8ad1f0" stroke-width="0.8"/>
         <!-- Hand holding block -->
         <circle cx="68" cy="58" r="4" fill="#e8c09a"/>
       </g>
       <!-- Other arm (static) -->
-      <rect x="16" y="62" width="14" height="7" rx="3.5" fill="#0d4a8a" transform="rotate(20 20 65)"/>
+      <rect x="16" y="62" width="14" height="7" rx="3.5" fill="#1f5f80" transform="rotate(20 20 65)"/>
     </g>
 
     <!-- Snow sparkles -->
-    <circle cx="65" cy="30" r="1.5" fill="#00d4ff" opacity="0.4">
+    <circle cx="65" cy="30" r="1.5" fill="#8ad1f0" opacity="0.4">
       <animate attributeName="opacity" values="0.4;0;0.4" dur="2.3s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="155" cy="40" r="1" fill="#00d4ff" opacity="0.3">
+    <circle cx="155" cy="40" r="1" fill="#8ad1f0" opacity="0.3">
       <animate attributeName="opacity" values="0.3;0;0.3" dur="1.8s" begin="0.5s" repeatCount="indefinite"/>
     </circle>
-    <circle cx="145" cy="25" r="1.5" fill="#00ffb3" opacity="0.3">
+    <circle cx="145" cy="25" r="1.5" fill="#22c55e" opacity="0.3">
       <animate attributeName="opacity" values="0.3;0;0.3" dur="2.8s" begin="1s" repeatCount="indefinite"/>
     </circle>
   </svg>
@@ -343,7 +358,7 @@ function buildingAnimation() {
 function destroyingAnimation() {
   return `<div class="igloo-anim-wrap">
   <svg class="igloo-destroy-svg" viewBox="0 0 200 90" xmlns="http://www.w3.org/2000/svg">
-    <ellipse cx="100" cy="84" rx="85" ry="5" fill="#041220" opacity="0.5"/>
+    <ellipse cx="100" cy="84" rx="85" ry="5" fill="#0e1b28" opacity="0.5"/>
     <!-- Melting igloo blocks (dripping) -->
     <rect class="melt-blk melt-1" x="82" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.7"/>
     <rect class="melt-blk melt-2" x="100" y="63" width="16" height="12" rx="2.5" fill="none" stroke="#f59e0b" stroke-width="1.2" opacity="0.7"/>
@@ -357,16 +372,16 @@ function destroyingAnimation() {
     <ellipse class="drip drip-3" cx="126" cy="77" rx="2"   ry="3"   fill="#f59e0b" opacity="0.45"/>
     <!-- Sad eskimo watching -->
     <g>
-      <ellipse cx="36" cy="68" rx="16" ry="17" fill="#0d4a8a"/>
-      <circle cx="36" cy="46" r="13" fill="#0d4a8a"/>
+      <ellipse cx="36" cy="68" rx="16" ry="17" fill="#1f5f80"/>
+      <circle cx="36" cy="46" r="13" fill="#1f5f80"/>
       <circle cx="36" cy="46" r="9"  fill="#e8c09a"/>
-      <path d="M26 44 Q36 36 46 44" fill="#1a6dc0" opacity="0.8"/>
+      <path d="M26 44 Q36 36 46 44" fill="#5bb6dd" opacity="0.8"/>
       <path d="M32 44 Q33.5 42 35 44" stroke="#1a0800" stroke-width="1.2" fill="none" stroke-linecap="round"/>
       <path d="M37 44 Q38.5 42 40 44" stroke="#1a0800" stroke-width="1.2" fill="none" stroke-linecap="round"/>
       <path d="M32 51 Q36 47 40 51" stroke="#8b4513" stroke-width="1.2" fill="none" stroke-linecap="round"/>
-      <ellipse class="tear" cx="31" cy="53" rx="1.5" ry="2.5" fill="#00d4ff" opacity="0.7"/>
-      <rect x="16" y="62" width="14" height="7" rx="3.5" fill="#0d4a8a" transform="rotate(40 18 66)"/>
-      <rect x="48" y="62" width="14" height="7" rx="3.5" fill="#0d4a8a" transform="rotate(-40 60 66)"/>
+      <ellipse class="tear" cx="31" cy="53" rx="1.5" ry="2.5" fill="#8ad1f0" opacity="0.7"/>
+      <rect x="16" y="62" width="14" height="7" rx="3.5" fill="#1f5f80" transform="rotate(40 18 66)"/>
+      <rect x="48" y="62" width="14" height="7" rx="3.5" fill="#1f5f80" transform="rotate(-40 60 66)"/>
     </g>
     <!-- Amber particles rising -->
     <circle cx="95"  cy="50" r="1.2" fill="#f59e0b" opacity="0.5"><animate attributeName="cy" values="50;30;50" dur="2s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0;0.5" dur="2s" repeatCount="indefinite"/></circle>
@@ -382,48 +397,48 @@ function errorAnimation() {
   return `<div class="igloo-anim-wrap">
   <svg class="igloo-error-svg" viewBox="0 0 200 90" xmlns="http://www.w3.org/2000/svg">
     <!-- Ground -->
-    <ellipse cx="100" cy="84" rx="80" ry="5" fill="#041220" opacity="0.6"/>
+    <ellipse cx="100" cy="84" rx="80" ry="5" fill="#0e1b28" opacity="0.6"/>
 
     <!-- Broken igloo pieces -->
     <g class="broken-piece">
-      <rect x="120" y="62" width="16" height="11" rx="2.5" fill="none" stroke="#ff3d6b" stroke-width="1.2" opacity="0.5" transform="rotate(18 128 67)"/>
+      <rect x="120" y="62" width="16" height="11" rx="2.5" fill="none" stroke="#ef4444" stroke-width="1.2" opacity="0.5" transform="rotate(18 128 67)"/>
     </g>
     <g class="broken-piece">
-      <rect x="138" y="58" width="13" height="9" rx="2.5" fill="none" stroke="#ff3d6b" stroke-width="1.2" opacity="0.4" transform="rotate(-25 144 62)"/>
+      <rect x="138" y="58" width="13" height="9" rx="2.5" fill="none" stroke="#ef4444" stroke-width="1.2" opacity="0.4" transform="rotate(-25 144 62)"/>
     </g>
     <g class="broken-piece">
-      <ellipse cx="133" cy="50" rx="10" ry="5" fill="none" stroke="#ff3d6b" stroke-width="1.2" opacity="0.35" transform="rotate(10 133 50)"/>
+      <ellipse cx="133" cy="50" rx="10" ry="5" fill="none" stroke="#ef4444" stroke-width="1.2" opacity="0.35" transform="rotate(10 133 50)"/>
     </g>
     <!-- Crack line -->
-    <path d="M118 75 L123 65 L117 60 L122 48" stroke="#ff3d6b" stroke-width="1.2" fill="none" opacity="0.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M118 75 L123 65 L117 60 L122 48" stroke="#ef4444" stroke-width="1.2" fill="none" opacity="0.4" stroke-linecap="round" stroke-linejoin="round"/>
     <!-- Base stub (what's left) -->
-    <rect x="90" y="67" width="16" height="11" rx="2.5" fill="none" stroke="#ff3d6b" stroke-width="1.2" opacity="0.4"/>
-    <rect x="108" y="67" width="14" height="11" rx="2.5" fill="none" stroke="#ff3d6b" stroke-width="1.2" opacity="0.35"/>
+    <rect x="90" y="67" width="16" height="11" rx="2.5" fill="none" stroke="#ef4444" stroke-width="1.2" opacity="0.4"/>
+    <rect x="108" y="67" width="14" height="11" rx="2.5" fill="none" stroke="#ef4444" stroke-width="1.2" opacity="0.35"/>
 
     <!-- Sad eskimo -->
     <g class="eskimo-sad-body">
       <!-- Coat body (hunched) -->
-      <ellipse cx="44" cy="70" rx="16" ry="15" fill="#0d4a8a"/>
+      <ellipse cx="44" cy="70" rx="16" ry="15" fill="#1f5f80"/>
       <!-- Hood -->
-      <circle cx="44" cy="50" r="13" fill="#0d4a8a"/>
+      <circle cx="44" cy="50" r="13" fill="#1f5f80"/>
       <!-- Face -->
       <circle cx="44" cy="50" r="9"  fill="#e8c09a"/>
       <!-- Hood rim -->
-      <path d="M34 48 Q44 40 54 48" fill="#1a6dc0" opacity="0.8"/>
+      <path d="M34 48 Q44 40 54 48" fill="#5bb6dd" opacity="0.8"/>
       <!-- Sad eyes (droopy) -->
       <path d="M40 47 Q41.5 45 43 47" stroke="#1a0800" stroke-width="1.2" fill="none" stroke-linecap="round"/>
       <path d="M45 47 Q46.5 45 48 47" stroke="#1a0800" stroke-width="1.2" fill="none" stroke-linecap="round"/>
       <!-- Frown -->
       <path d="M40 54 Q44 50 48 54" stroke="#8b4513" stroke-width="1.2" fill="none" stroke-linecap="round"/>
       <!-- Tear -->
-      <ellipse class="tear" cx="41" cy="55" rx="1.5" ry="2.5" fill="#00d4ff" opacity="0.7"/>
+      <ellipse class="tear" cx="41" cy="55" rx="1.5" ry="2.5" fill="#8ad1f0" opacity="0.7"/>
       <!-- Arms hanging down -->
-      <rect x="26" y="66" width="14" height="6" rx="3" fill="#0d4a8a" transform="rotate(40 28 66)"/>
-      <rect x="56" y="66" width="14" height="6" rx="3" fill="#0d4a8a" transform="rotate(-40 68 66)"/>
+      <rect x="26" y="66" width="14" height="6" rx="3" fill="#1f5f80" transform="rotate(40 28 66)"/>
+      <rect x="56" y="66" width="14" height="6" rx="3" fill="#1f5f80" transform="rotate(-40 68 66)"/>
     </g>
 
     <!-- Red X marks -->
-    <text x="155" y="52" font-size="22" fill="#ff3d6b" opacity="0.6" font-family="monospace">✕</text>
+    <text x="155" y="52" font-size="22" fill="#ef4444" opacity="0.6" font-family="monospace">✕</text>
   </svg>
   <div style="font-size:11px;color:var(--red);font-family:var(--mono);letter-spacing:.05em;margin-top:-4px;text-align:center">build failed — check logs</div>
   </div>`;
@@ -437,9 +452,9 @@ function esc(s) {
 // ─── Avatar / badge helpers ────────────────────────────────────────────────────
 function _avatarPalette(str) {
   const palettes = [
-    { bg: 'rgba(0,212,255,0.15)',   border: 'rgba(0,212,255,0.3)',   color: '#00d4ff' },
-    { bg: 'rgba(157,92,255,0.15)',  border: 'rgba(157,92,255,0.3)',  color: '#9d5cff' },
-    { bg: 'rgba(52,211,153,0.15)',  border: 'rgba(52,211,153,0.3)',  color: '#34d399' },
+    { bg: 'rgba(138,209,240,0.15)',   border: 'rgba(138,209,240,0.3)',   color: '#8ad1f0' },
+    { bg: 'rgba(157,92,255,0.15)',  border: 'rgba(157,92,255,0.3)',  color: '#a78bfa' },
+    { bg: 'rgba(52,211,153,0.15)',  border: 'rgba(52,211,153,0.3)',  color: '#22c55e' },
     { bg: 'rgba(251,191,36,0.15)',  border: 'rgba(251,191,36,0.3)',  color: '#fbbf24' },
     { bg: 'rgba(236,72,153,0.15)', border: 'rgba(236,72,153,0.3)',  color: '#ec4899' },
     { bg: 'rgba(255,107,53,0.15)',  border: 'rgba(255,107,53,0.3)',  color: '#ff6b35' },
@@ -465,7 +480,7 @@ function orgAvatar(name, size = 36, radius = '10px') {
 
 function roleBadge(role) {
   const styles = {
-    admin:  'background:rgba(0,212,255,0.1);color:#00d4ff;border:1px solid rgba(0,212,255,0.22)',
+    admin:  'background:rgba(138,209,240,0.1);color:#8ad1f0;border:1px solid rgba(138,209,240,0.22)',
     member: 'background:rgba(255,255,255,0.05);color:var(--muted);border:1px solid var(--border)',
     viewer: 'background:rgba(255,255,255,0.03);color:var(--muted);border:1px solid var(--border)',
   };
@@ -511,6 +526,59 @@ function timeAgo(iso) {
 }
 
 // ─── Workspace table row (click to open detail panel) ────────────────────────
+
+// ─── Igloo mark: the workspace's state, drawn ────────────────────────────────
+// running = lit door, frozen = frosted, building = dome draws itself, error = cracked.
+function iglooMark(status) {
+  return `<svg class="mark mark--${status}" viewBox="0 0 48 36" aria-hidden="true">
+    <path class="mark-fill" d="M4 30 A20 20 0 0 1 44 30 Z"/>
+    <path class="mark-seam" d="M9 22 H39 M14 14.5 H34"/>
+    <path class="mark-dome" d="M4 30 A20 20 0 0 1 44 30"/>
+    <path class="mark-door" d="M19 30 V25 A5 5 0 0 1 29 25 V30 Z"/>
+    <path class="mark-ground" d="M1.5 30 H46.5"/>
+    <g class="mark-frost"><circle cx="13" cy="19" r="1"/><circle cx="35" cy="17" r="1.2"/><circle cx="24" cy="12" r="0.9"/><circle cx="31" cy="25" r="0.8"/></g>
+  </svg>`;
+}
+
+function renderIglooTile(ws) {
+  const isSelected = state.selectedWsId === ws.id;
+  const providerLabel = {
+    'kubernetes': 'k8s', 'docker': 'docker', 'docker-terraform': 'docker',
+    'aws-fargate': 'fargate', 'fly': 'fly.io', 'gcp-cloudrun': 'cloud run',
+  }[ws.provider] || ws.provider || 'cloud';
+  const label = { running: 'Running', sleeping: 'Frozen', creating: 'Building', error: 'Failed', deleting: 'Destroying' }[ws.status] || ws.status;
+  const when = timeAgo(ws.last_active_at);
+  const note = ws.status === 'running' ? (when ? `Active ${when}` : 'Active now')
+             : ws.status === 'sleeping' ? (when ? `Last active ${when}` : 'Sleeping at $0')
+             : ws.status === 'creating' ? 'Setting up'
+             : ws.status === 'error' ? 'Setup did not finish'
+             : '';
+  const act = (cls, fn, text) => `<button class="tile-btn ${cls}" onclick="${fn}">${text}</button>`;
+  return `
+  <article class="tile tile--${ws.status}${isSelected ? ' tile--selected' : ''}" onclick="app.openWorkspace('${ws.id}')" data-id="${ws.id}">
+    <div class="tile-head">
+      ${iglooMark(ws.status)}
+      <div class="tile-title">
+        <h3 class="tile-name">${esc(ws.name)}</h3>
+        <div class="tile-tags"><span class="tile-template">${esc(ws.template_name || 'custom')}</span><span class="ws-provider-tag">${esc(providerLabel)}</span></div>
+      </div>
+    </div>
+    <div class="tile-state">
+      <span class="tile-status tile-status--${ws.status}">${label}</span>
+      <span class="tile-note">${esc(note)}</span>
+    </div>
+    <div class="tile-actions" onclick="event.stopPropagation()">
+      ${ws.status === 'running' ? act('tile-btn--main', `app.openTerminal('${ws.id}','${esc(ws.name)}')`, 'Terminal') + act('', `app.openVSCode('${ws.id}')`, 'VS Code') + act('tile-btn--quiet', `app.stopWorkspace('${ws.id}')`, 'Sleep') : ''}
+      ${ws.status === 'sleeping' ? act('tile-btn--main', `app.startWorkspace('${ws.id}')`, 'Wake up') : ''}
+      ${ws.status === 'creating' ? act('', `app.openWorkspace('${ws.id}')`, 'View progress') : ''}
+      ${ws.status === 'error' ? act('', `app.openWorkspace('${ws.id}')`, 'View log') : ''}
+      <button class="tile-btn tile-btn--icon" title="Delete ${esc(ws.name)}" aria-label="Delete ${esc(ws.name)}" onclick="app.deleteWorkspace('${ws.id}','${esc(ws.name)}')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M9 6V4h6v2"/></svg>
+      </button>
+    </div>
+  </article>`;
+}
+
 function renderIglooCard(ws) {
   const isSelected = state.selectedWsId === ws.id;
   const providerLabel = {
@@ -573,7 +641,7 @@ function renderWorkspaceDetail(ws) {
     'aws-fargate': 'AWS Fargate', 'fly': 'Fly.io', 'gcp-cloudrun': 'Cloud Run',
   }[ws.provider] || ws.provider || 'Cloud';
 
-  const statusLabel = { running: 'Running', sleeping: 'Sleeping', creating: 'Building', deleting: 'Destroying', error: 'Failed' }[ws.status] || ws.status;
+  const statusLabel = { running: 'Running', sleeping: 'Frozen', creating: 'Building', deleting: 'Destroying', error: 'Failed' }[ws.status] || ws.status;
 
   // Default tab: build log if mid-build/failed, else overview
   const activeTab = state.wsDetailTab || (isBuilding || isFailed || isDeleting ? 'build' : 'overview');
@@ -583,7 +651,7 @@ function renderWorkspaceDetail(ws) {
   <div class="ws-detail">
     <div class="ws-detail-header">
       <div class="ws-detail-header-left">
-        <span class="ws-dot ws-dot--${ws.status}"></span>
+        ${iglooMark(ws.status)}
         <span class="ws-detail-name">${esc(ws.name)}</span>
         <span class="ws-pill ws-pill--${ws.status}">${statusLabel}</span>
       </div>
@@ -595,6 +663,7 @@ function renderWorkspaceDetail(ws) {
     <div class="ws-detail-tabs">
       <button class="ws-detail-tab${activeTab==='overview'?' active':''}" onclick="app.setWsDetailTab('overview')">Overview</button>
       <button class="ws-detail-tab${activeTab==='build'?' active':''}" onclick="app.setWsDetailTab('build')">Build log</button>
+      ${isGuarded(ws) ? `<button class="ws-detail-tab${activeTab==='activity'?' active':''}" onclick="app.setWsDetailTab('activity')">Network</button>` : ''}
       <button class="ws-detail-tab${activeTab==='settings'?' active':''}" onclick="app.setWsDetailTab('settings')">Settings</button>
     </div>
 
@@ -626,6 +695,8 @@ function renderWorkspaceDetail(ws) {
       </div>
     ` : ''}
 
+    ${activeTab === 'activity' && isGuarded(ws) ? renderActivityPanel(ws) : ''}
+
     ${activeTab === 'settings' ? `
       <div class="ws-detail-meta">
         <div class="ws-detail-row"><span class="ws-detail-label">Workspace ID</span><span style="font-family:var(--mono);font-size:11px;color:var(--muted)">${esc(ws.id)}</span></div>
@@ -638,6 +709,51 @@ function renderWorkspaceDetail(ws) {
       </div>
     ` : ''}
   </div>`;
+}
+
+// ─── Network activity (workspaces behind the egress gateway) ────────────────
+const isGuarded = (ws) => !!(ws.meta && ws.meta.guard_policy);
+
+const ACTIVITY_REASONS = {
+  'not-in-allow-list': 'Not in this workspace’s allow-list',
+  'private-address':   'Internal address — blocked',
+  'unknown-route':     'No such credential route',
+};
+
+function renderActivityPanel(ws) {
+  setTimeout(() => app._loadActivity(ws.id), 0);
+  const sandbox = ws.meta && ws.meta.sandbox === 'true';
+  const expires = sandbox && ws.meta.sandbox_expires ? new Date(ws.meta.sandbox_expires) : null;
+  return `
+    <div class="ws-detail-section activity" id="activity-panel">
+      ${expires ? `<div class="activity-note">Sandbox — deleted automatically ${expires > new Date() ? 'at ' + expires.toLocaleTimeString() : 'now'}.</div>` : ''}
+      <div class="activity-policy" id="activity-policy">loading policy…</div>
+      <div class="activity-head"><span>Network activity</span><span class="log-panel-meta" id="activity-meta"></span></div>
+      <div class="activity-list" id="activity-body"></div>
+    </div>`;
+}
+
+function renderActivityRows(events) {
+  if (!events.length) {
+    return `<div class="activity-empty">
+      <div class="activity-empty-title">No network activity yet</div>
+      <div class="activity-empty-hint">When this workspace reaches for anything outside itself, the gateway’s decision shows up here.</div>
+    </div>`;
+  }
+  return `<table class="activity-table"><thead><tr><th>When</th><th></th><th>Destination</th><th>Why</th></tr></thead><tbody>${
+    events.map(e => {
+      const t = new Date(e.time).toLocaleTimeString();
+      const dest = e.kind === 'route' ? `route ${esc(e.rule.replace(/^route:/, ''))} → ${esc(e.host)}` : esc(e.host);
+      const what = e.method ? `<span class="activity-method">${esc(e.method)}</span> ` : '';
+      const why = e.decision === 'deny' ? (ACTIVITY_REASONS[e.rule] || e.rule || '') : (e.kind === 'route' ? '' : e.rule ? 'Allowed by ' + e.rule : '');
+      const status = e.status ? ` · ${e.status}` : '';
+      return `<tr class="activity-row activity-row--${e.decision}">
+        <td class="activity-time">${t}</td>
+        <td><span class="activity-pill activity-pill--${e.decision}">${e.decision === 'deny' ? 'Blocked' : 'Allowed'}</span></td>
+        <td class="activity-dest">${what}${dest}${esc(e.path && e.kind !== 'connect' ? e.path : '')}<span class="activity-status">${status}</span></td>
+        <td class="activity-why">${esc(why)}</td>
+      </tr>`;
+    }).join('')}</tbody></table>`;
 }
 
 function renderInlineBuildLog(ws, isTerraform) {
@@ -707,6 +823,9 @@ function renderShell() {
         </button>
         <button class="nav-item ${state.view==='admin-workspaces'?'active':''}" onclick="app.setView('admin-workspaces')">
           ${icon.igloo} All Workspaces
+        </button>
+        <button class="nav-item ${state.view==='admin-network'?'active':''}" onclick="app.setView('admin-network')">
+          ${icon.settings} Network baseline
         </button>` : ''}
         <span class="nav-section-label">Account</span>
         <button class="nav-item ${state.view==='userSettings'?'active':''}" onclick="app.setView('userSettings')">
@@ -786,7 +905,7 @@ function renderSkeletonForView(v) {
   el.innerHTML = `<div class="skeleton-grid">${cardSkel.repeat(6)}</div>`;
 }
 
-function renderIgloosView(q, opts = {}) {
+function renderIgloosViewInner(q, opts = {}) {
   const runningCount = state.workspaces.filter(w => w.status === 'running').length;
   const titleEl = document.getElementById('view-title');
   titleEl.textContent = state.user?.is_admin ? 'All Igloos' : 'My Igloos';
@@ -810,9 +929,10 @@ function renderIgloosView(q, opts = {}) {
     { val: 'creating',  label: 'Building' },
     { val: 'error',     label: 'Error' },
   ];
+  const countOf = v => v ? state.workspaces.filter(w => w.status === v).length : state.workspaces.length;
   const statusChips = statuses.map(s =>
     `<button class="ws-filter-chip${f.status === s.val ? ' ws-filter-chip--active' : ''}${s.val ? ' ws-filter-chip--'+s.val : ''}"
-       onclick="app.setWsFilter('status',${s.val === null ? 'null' : `'${s.val}'`})">${s.label}</button>`
+       onclick="app.setWsFilter('status',${s.val === null ? 'null' : `'${s.val}'`})">${s.label}<span class="chip-n">${countOf(s.val)}</span></button>`
   ).join('');
   const tplOptions = state.templates.map(t =>
     `<option value="${t.id}" ${f.templateId === t.id ? 'selected' : ''}>${esc(t.name)}</option>`
@@ -830,19 +950,17 @@ function renderIgloosView(q, opts = {}) {
     return true;
   });
 
-  if (!visible.length && !state.selectedWsId) {
-    el.innerHTML = state.workspaces.length
-      ? `<div class="empty-state"><div class="empty-state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" opacity="0.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div><h2>No matches</h2><p>Try a different search or clear the filters.</p></div>`
-      : `<div class="empty-state">
+  if (!state.workspaces.length && !state.selectedWsId) {
+    el.innerHTML = `<div class="empty-state">
            <svg class="empty-igloo" viewBox="0 0 100 60" fill="none" xmlns="http://www.w3.org/2000/svg">
              <path d="M10 42 Q10 8 50 8 Q90 8 90 42" stroke="white" stroke-width="3" stroke-linecap="round"/>
              <line x1="4" y1="42" x2="96" y2="42" stroke="white" stroke-width="3" stroke-linecap="round"/>
              <path d="M37 42 Q37 30 50 30 Q63 30 63 42" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
              <path d="M18 35 Q50 26 82 35" stroke="white" stroke-width="1.5" stroke-dasharray="3 3" opacity="0.5"/>
            </svg>
-           <h2>No igloos yet</h2>
-           <p>Build your first igloo from a template and connect instantly. It'll sleep to $0 when idle.</p>
-           <button class="btn btn-primary" style="margin-top:4px;width:auto" onclick="app.showNewIgloo()">${icon.plus} Build new igloo</button>
+           <h2>No workspaces yet</h2>
+           <p>Create one from a template and connect in seconds. It sleeps at $0 when you're not using it.</p>
+           <button class="btn btn-primary" style="margin-top:4px;width:auto" onclick="app.showNewIgloo()">${icon.plus} Create workspace</button>
          </div>`;
     return;
   }
@@ -851,31 +969,21 @@ function renderIgloosView(q, opts = {}) {
     ? state.workspaces.find(w => w.id === state.selectedWsId)
     : null;
 
-  const tableHtml = visible.length ? `
-  <div class="ws-table-wrap">
-    <table class="ws-table">
-      <thead>
-        <tr>
-          <th class="ws-table-th">Name</th>
-          <th class="ws-table-th">Template</th>
-          <th class="ws-table-th">Status</th>
-          <th class="ws-table-th">Last active</th>
-          <th class="ws-table-th ws-table-th--actions"></th>
-        </tr>
-      </thead>
-      <tbody>
-        ${visible.map(renderIglooCard).join('')}
-      </tbody>
-    </table>
-  </div>` : `<div class="text-muted" style="padding:24px;text-align:center;font-size:13px">No workspaces match the current filters.</div>`;
+  const tableHtml = visible.length
+    ? `<div class="tiles">${visible.map(renderIglooTile).join('')}</div>`
+    : `<div class="no-match">
+         <p class="no-match-title">No workspaces match${q ? ` “${esc(q)}”` : ' these filters'}</p>
+         <p class="no-match-hint">Search by name, template or status, or narrow with <code>status:frozen</code> or <code>template:kubernetes</code>.</p>
+         <button class="btn btn-ghost btn-sm" style="width:auto" onclick="app.resetWsSearch()">Clear search and filters</button>
+       </div>`;
 
   const filterBar = `
   <div class="ws-filter-bar">
     <div class="ws-filter-bar-left">
       <div class="search-bar-wrap">
         <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input class="search-bar search-bar--with-icon" id="ws-search" placeholder="Search workspaces…" value="${esc(q||'')}"
-          oninput="app.searchWorkspaces(this.value)" style="padding-left:32px">
+        <input class="search-bar search-bar--with-icon" id="ws-search" placeholder="Search by name, template or status" value="${esc(q||'')}"
+          oninput="app.searchWorkspaces(this.value)" aria-label="Search workspaces" style="padding-left:32px">
       </div>
       <div class="ws-filter-chips-inline">
         ${statusChips}
@@ -889,9 +997,15 @@ function renderIgloosView(q, opts = {}) {
     </div>
   </div>`;
 
+  const nOf = st => state.workspaces.filter(w => w.status === st).length;
+  const bits = [[nOf('running'), 'running'], [nOf('sleeping'), 'frozen'], [nOf('creating'), 'building'], [nOf('error'), 'failed']]
+    .filter(([n]) => n).map(([n, l]) => `${n} ${l}`);
+  const statsStrip = selectedWs || !bits.length ? '' : `<p class="ws-summary">${bits.join(', ')}</p>`;
+
   el.innerHTML = `
   <div class="ws-layout${selectedWs ? ' ws-layout--split' : ''}">
     <div class="ws-cards-pane">
+      ${statsStrip}
       ${filterBar}
       ${tableHtml}
     </div>
@@ -906,20 +1020,53 @@ function renderIgloosView(q, opts = {}) {
 }
 
 // Client-side workspace filter matching the same key:value syntax as the API.
+
+// Re-rendering replaces the whole panel, including the search box; put the cursor back.
+function renderIgloosView(q, opts = {}) {
+  const prev = document.activeElement;
+  const hadFocus = prev && prev.id === 'ws-search';
+  const start = hadFocus ? prev.selectionStart : 0, end = hadFocus ? prev.selectionEnd : 0;
+  renderIgloosViewInner(q, opts);
+  if (hadFocus) {
+    const input = document.getElementById('ws-search');
+    if (input) { input.focus(); try { input.setSelectionRange(start, end); } catch (_) {} }
+  }
+}
+
+// Words people use for each status, so "frozen", "sleeping" and "status:frozen" all work.
+const WS_STATUS_WORDS = {
+  running:  ['running', 'live', 'active'],
+  sleeping: ['frozen', 'sleeping', 'asleep'],
+  creating: ['building', 'creating'],
+  error:    ['failed', 'error'],
+  deleting: ['destroying', 'deleting'],
+};
+
+function wsStatusMatches(ws, word) {
+  const w = word.toLowerCase();
+  return (WS_STATUS_WORDS[ws.status] || [ws.status]).some(s => s.startsWith(w));
+}
+
+// Plain words match name, template, provider or status. key:value narrows one field.
 function wsMatchesQuery(ws, q) {
-  if (!q) return true;
-  const terms = q.trim().split(/\s+/);
-  return terms.every(term => {
-    const [key, ...rest] = term.split(':');
-    const val = rest.join(':').toLowerCase();
-    if (!val) return ws.name.toLowerCase().includes(key.toLowerCase());
-    switch(key.toLowerCase()) {
-      case 'owner':   return val === 'me' ? ws.user_id === state.user?.id : ws.user_id.toLowerCase().includes(val);
-      case 'template': return (ws.template_name||'').toLowerCase().includes(val);
-      case 'name':    return ws.name.toLowerCase().includes(val);
-      case 'status':  return ws.status === val;
-      case 'org':     return (ws.org_id||'').toLowerCase().includes(val);
-      default:        return true;
+  if (!q || !q.trim()) return true;
+  const has = (v, t) => String(v || '').toLowerCase().includes(t);
+  return q.trim().split(/\s+/).every(term => {
+    const i = term.indexOf(':');
+    const key = i > 0 ? term.slice(0, i).toLowerCase() : '';
+    const val = (i > 0 ? term.slice(i + 1) : term).toLowerCase();
+    if (i > 0 && !val) return true;              // "owner:" still being typed
+    switch (key) {
+      case 'owner':    return val === 'me' ? ws.user_id === state.user?.id : has(ws.user_id, val);
+      case 'template': return has(ws.template_name, val);
+      case 'name':     return has(ws.name, val);
+      case 'status':   return wsStatusMatches(ws, val);
+      case 'org':      return has(ws.org_id, val);
+      case 'provider': return has(ws.provider, val);
+      default: {
+        const t = term.toLowerCase();             // plain word (or unknown "x:y")
+        return has(ws.name, t) || has(ws.template_name, t) || has(ws.provider, t) || wsStatusMatches(ws, t);
+      }
     }
   });
 }
@@ -1051,19 +1198,28 @@ function renderUserSettings(tab) {
     if (tab === 'security') return `
     <div class="usettings-section">
       <div class="usettings-section-title">Password</div>
+      ${['oidc', 'none'].includes(state.user?.login_type) ? `
       <div class="usettings-coming-soon usettings-coming-soon--info" style="margin-bottom:16px">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color:var(--accent);flex-shrink:0"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-        <span>Password changes are managed through your SSO provider. Contact your administrator for access changes.</span>
-      </div>
-      <div class="field" style="opacity:0.4;pointer-events:none">
-        <label>Current password</label>
-        <input type="password" placeholder="••••••••" disabled />
-      </div>
-      <div class="field" style="opacity:0.4;pointer-events:none">
-        <label>New password</label>
-        <input type="password" placeholder="••••••••" disabled />
-      </div>
-      <button class="btn btn-ghost" disabled style="width:auto;opacity:0.4;cursor:not-allowed">Update password</button>
+        <span>This account signs in another way, so it has no password to change here.</span>
+      </div>` : `
+      <div class="usettings-section-desc">Changing it signs you out everywhere else.</div>
+      <div class="usettings-form">
+        <div class="field">
+          <label>Current password</label>
+          <input id="pw-current" type="password" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label>New password</label>
+          <input id="pw-new" type="password" autocomplete="new-password" />
+          <div class="field-hint">8 to 72 characters.</div>
+        </div>
+        <div class="field">
+          <label>New password again</label>
+          <input id="pw-again" type="password" autocomplete="new-password" />
+        </div>
+        <button class="btn btn-primary" style="width:auto" onclick="app.changePassword()">Update password</button>
+      </div>`}
       <div class="usettings-section-divider"></div>
       <div class="usettings-section-title" style="margin-top:8px">Single Sign-On</div>
       <div class="usettings-coming-soon usettings-coming-soon--success">
@@ -1163,6 +1319,65 @@ function renderUserSettings(tab) {
   </div>`;
 }
 
+async function renderNetworkBaselineView() {
+  document.getElementById('view-title').textContent = 'Network baseline';
+  document.getElementById('topbar-actions').innerHTML = '';
+  const el = document.getElementById('content');
+  el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
+  let bl = {};
+  try { bl = await api.guardBaseline.get(); } catch {}
+  let outside = [];
+  try {
+    outside = (await api.admin.listWorkspaces()).filter(w => !(w.meta && w.meta.guard_policy) && !['deleting', 'deleted'].includes(w.status));
+  } catch {}
+  const lines = (a) => esc((a || []).join('\n'));
+  el.innerHTML = `
+  <div style="max-width:580px;display:flex;flex-direction:column;gap:14px">
+    <div class="settings-card">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+        Rules every workspace and sandbox must follow, whatever its owner sets. They apply to
+        existing workspaces within seconds. One host per line; <span style="font-family:var(--mono);font-size:12px">*.example.com</span> matches subdomains.
+      </p>
+      <div class="field">
+        <label>Default network access</label>
+        <select id="bl-mode" onchange="document.getElementById('bl-ceiling-field').style.display = this.value === 'open' ? 'none' : ''">
+          <option value="restricted" ${bl.mode === 'open' ? '' : 'selected'}>Restricted: only hosts a workspace's own policy allows</option>
+          <option value="open" ${bl.mode === 'open' ? 'selected' : ''}>Open: everything except the blocked list below</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Always blocked (wins over any allow)</label>
+        <textarea id="bl-deny" rows="3" style="font-family:var(--mono);font-size:12px">${lines(bl.deny)}</textarea>
+      </div>
+      <div class="field" id="bl-ceiling-field" style="${bl.mode === 'open' ? 'display:none' : ''}">
+        <label>Allowed at most (leave empty for no ceiling)</label>
+        <textarea id="bl-ceiling" rows="3" style="font-family:var(--mono);font-size:12px">${lines(bl.ceiling)}</textarea>
+      </div>
+      <div class="field">
+        <label>Longest sandbox lifetime, in seconds (0 for no limit)</label>
+        <input id="bl-ttl" type="number" min="0" value="${bl.max_sandbox_ttl_seconds || 0}" style="font-family:var(--mono);font-size:12px" />
+      </div>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:8px">
+        <input id="bl-private" type="checkbox" ${bl.forbid_private ? 'checked' : ''} /> Forbid access to private and internal addresses
+      </label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:13px;margin-bottom:16px">
+        <input id="bl-require" type="checkbox" ${bl.require_guard ? 'checked' : ''} /> Require every workspace to run behind the egress gateway (unguarded ones cannot be created or started)
+      </label>
+      <button class="btn btn-primary" style="width:auto" onclick="app.saveGuardBaseline()">Save baseline</button>
+    </div>
+    <div class="settings-card">
+      <div class="settings-card-title">Not covered by the baseline (${outside.length})</div>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:${outside.length ? 12 : 0}px;line-height:1.6">
+        ${outside.length
+          ? 'These igloos were created without the egress gateway, so they reach the network directly and none of the rules above apply. A workspace cannot be moved behind the gateway afterwards: create a new one with the gateway on. With "Require every workspace…" ticked, they cannot be started again once stopped.'
+          : 'Every workspace runs behind the egress gateway.'}
+      </p>
+      ${outside.map(w => `<div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:6px 0;border-top:1px solid var(--border)">
+        <span>${esc(w.name)}</span><span class="text-muted">${esc(w.status)}</span></div>`).join('')}
+    </div>
+  </div>`;
+}
+
 async function renderIntegrationsView() {
   document.getElementById('view-title').textContent = 'Integrations';
   document.getElementById('topbar-actions').innerHTML = '';
@@ -1178,7 +1393,7 @@ async function renderIntegrationsView() {
       <div class="settings-card-title" style="display:flex;align-items:center;gap:8px">
         Tailscale
         ${cfg.tailscale_configured
-          ? '<span style="font-size:11px;background:rgba(0,255,179,.12);color:var(--teal);padding:2px 8px;border-radius:20px;font-weight:500">Connected</span>'
+          ? '<span style="font-size:11px;background:rgba(34,197,94,.12);color:var(--teal);padding:2px 8px;border-radius:20px;font-weight:500">Connected</span>'
           : '<span style="font-size:11px;background:rgba(255,61,107,.08);color:var(--muted);padding:2px 8px;border-radius:20px">Not configured</span>'}
       </div>
       <p style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
@@ -1204,7 +1419,7 @@ async function renderIntegrationsView() {
         ${cfg.tailscale_configured ? `<button class="btn btn-ghost btn-sm" onclick="app.clearPlatformTailscale()">Disconnect</button>` : ''}
       </div>
       ${cfg.tailscale_configured ? `
-      <div style="margin-top:14px;padding:12px 14px;background:rgba(0,212,255,.05);border:1px solid rgba(0,212,255,.15);border-radius:var(--radius-sm);font-size:12px;color:var(--muted);line-height:1.7">
+      <div style="margin-top:14px;padding:12px 14px;background:rgba(138,209,240,.05);border:1px solid rgba(138,209,240,.15);border-radius:var(--radius-sm);font-size:12px;color:var(--muted);line-height:1.7">
         <strong style="color:var(--text)">How it works:</strong> On each workspace wake, Igloo issues a fresh ephemeral auth key via the Tailscale API and injects it into the container. The workspace joins your Tailnet automatically. SSH via <span style="font-family:var(--mono)">ssh root@igloo-&lt;name&gt;</span>.
       </div>` : ''}
     </div>
@@ -1213,7 +1428,7 @@ async function renderIntegrationsView() {
 
 async function renderUsersView() {
   document.getElementById('view-title').textContent = 'Users';
-  document.getElementById('topbar-actions').innerHTML = '';
+  document.getElementById('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" style="width:auto" onclick="app.addUser()">Add user</button>`;
   const el = document.getElementById('content');
   el.innerHTML = `<div class="text-muted" style="padding:24px">Loading…</div>`;
   try {
@@ -1233,6 +1448,7 @@ async function renderUsersView() {
                 ${u.is_admin
                   ? `<button class="btn btn-ghost btn-sm" onclick="app.demoteUser('${u.id}')">Remove admin</button>`
                   : `<button class="btn btn-ghost btn-sm" onclick="app.promoteUser('${u.id}')">Make admin</button>`}
+                ${['oidc', 'none'].includes(u.login_type) ? '' : `<button class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="app.resetUserPassword('${u.id}','${esc(u.name||u.email)}')">Reset password</button>`}
                 <button class="btn btn-danger btn-sm" style="margin-left:6px" onclick="app.deleteUserAdmin('${u.id}','${esc(u.name||u.email)}')">Delete</button>
               ` : '<span class="text-muted text-sm">you</span>'}
             </td>
@@ -1307,11 +1523,11 @@ async function _renderAdminWsResults(q) {
 
 function wsStatusBadge(status) {
   const colors = {
-    running:  'background:rgba(0,255,179,.1);color:#00ffb3;border:1px solid rgba(0,255,179,.2)',
+    running:  'background:rgba(34,197,94,.1);color:#22c55e;border:1px solid rgba(34,197,94,.2)',
     creating: 'background:rgba(255,196,0,.1);color:#ffc400;border:1px solid rgba(255,196,0,.2)',
     sleeping: 'background:rgba(74,127,165,.1);color:#4a7fa5;border:1px solid rgba(74,127,165,.2)',
-    deleting: 'background:rgba(255,61,107,.1);color:#ff3d6b;border:1px solid rgba(255,61,107,.2)',
-    error:    'background:rgba(255,61,107,.1);color:#ff3d6b;border:1px solid rgba(255,61,107,.2)',
+    deleting: 'background:rgba(255,61,107,.1);color:#ef4444;border:1px solid rgba(255,61,107,.2)',
+    error:    'background:rgba(255,61,107,.1);color:#ef4444;border:1px solid rgba(255,61,107,.2)',
   };
   const s = colors[status] || '';
   return `<span style="font-size:10px;font-weight:700;padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.05em;${s}">${status}</span>`;
@@ -1453,7 +1669,7 @@ async function renderOrgDetailView() {
         ${tc ? `
         <div style="padding:10px;display:grid;gap:6px">
           ${teams.map(t => `
-          <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:9px;transition:border-color .15s" onmouseover="this.style.borderColor='rgba(0,212,255,.2)'" onmouseout="this.style.borderColor='var(--border)'">
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:9px;transition:border-color .15s" onmouseover="this.style.borderColor='rgba(138,209,240,.2)'" onmouseout="this.style.borderColor='var(--border)'">
             ${orgAvatar(t.name, 30, '8px')}
             <div style="flex:1;min-width:0">
               <div style="font-weight:600;font-size:13px">${esc(t.name)}</div>
@@ -1511,6 +1727,18 @@ function renderTemplateVarForm(tpl) {
   </div>`;
 }
 
+// A guarded igloo cannot install packages while it starts, so its image has to come with what it
+// needs. While the gateway is ticked, offer the server's ready-made image; unticking restores the
+// template's own default. Anything the user typed over it is left alone.
+function syncGuardImage() {
+  const el = document.querySelector('.ws-var-field[data-var="workspace_image"]');
+  if (!el || !state.guardImage) return;
+  if (!el.dataset.def) el.dataset.def = el.value;
+  const guarded = document.getElementById('ws-guard')?.style.display !== 'none' && document.getElementById('ws-guarded')?.checked;
+  if (guarded && el.value === el.dataset.def) el.value = state.guardImage;
+  else if (!guarded && el.value === state.guardImage) el.value = el.dataset.def;
+}
+
 function collectWsVars() {
   const vars = {};
   document.querySelectorAll('.ws-var-field').forEach(el => {
@@ -1522,9 +1750,28 @@ function collectWsVars() {
   return vars;
 }
 
-function showNewIglooModal() {
+async function showNewIglooModal() {
   selectedTemplateId = state.templates[0]?.id || null;
   const firstTpl = state.templates.find(t => t.id === selectedTemplateId);
+  let bl = {};
+  try { bl = await api.guardBaseline.get(); } catch {}
+  state.guardImage = bl.sandbox_image || '';
+  const guardSection = !bl.gateway_enabled ? '' : `
+      <div class="field" id="ws-guard" style="${firstTpl?.provider === 'kubernetes' ? '' : 'display:none'}">
+        <div style="display:flex;gap:8px;align-items:center;font-size:13px">
+          <input id="ws-guarded" type="checkbox" style="width:auto;flex:none" checked ${bl.require_guard ? 'disabled' : ''}
+            onchange="document.getElementById('ws-guard-hosts').style.display = this.checked ? '' : 'none'; syncGuardImage()" />
+          <span>Run behind the egress gateway (recommended)</span>
+        </div>
+        <div id="ws-guard-hosts" style="margin-top:8px">
+          <div style="font-size:12px;color:var(--muted);margin-bottom:6px;line-height:1.5">
+            Everything this igloo sends out goes through the gateway: nothing is reachable except what you list, and real credentials never enter it.
+            ${bl.mode === 'open' ? 'Your administrator lets igloos reach anything that is not on the blocked list.' : ''}
+            ${bl.require_guard ? 'Your administrator requires this.' : 'It cannot be added later.'}
+          </div>
+          <textarea id="ws-guard-allow" rows="3" placeholder="${bl.mode === 'open' ? 'Not needed: everything except the administrator\'s blocked list is reachable.' : 'Hosts it may reach, one per line (e.g. github.com, *.pypi.org). Empty allows nothing.'}" style="font-family:var(--mono);font-size:12px"></textarea>
+        </div>
+      </div>`;
   document.body.insertAdjacentHTML('beforeend', `
   <div class="modal-overlay" id="new-ws-modal">
     <div class="modal">
@@ -1543,12 +1790,14 @@ function showNewIglooModal() {
         </div>
       </div>
       <div id="ws-vars">${renderTemplateVarForm(firstTpl)}</div>
+      ${guardSection}
       <div class="modal-footer">
         <button class="btn btn-ghost" onclick="document.getElementById('new-ws-modal').remove()">Cancel</button>
         <button class="btn btn-primary" style="width:auto;min-width:130px" onclick="app.createWorkspace()">Start building</button>
       </div>
     </div>
   </div>`);
+  syncGuardImage();
 }
 
 function templateFilesHTML(files) {
@@ -1725,6 +1974,7 @@ const viewToPath = {
   'userSettings':     '/settings',
   'users':            '/users',
   'admin-workspaces': '/admin/workspaces',
+  'admin-network':    '/admin/network',
   'orgs':             '/orgs',
   'org-detail':       '/orgs',
 };
@@ -1735,6 +1985,7 @@ const pathToView = {
   '/settings':         'userSettings',
   '/users':            'users',
   '/admin/workspaces': 'admin-workspaces',
+  '/admin/network':    'admin-network',
   '/orgs':             'orgs',
 };
 
@@ -1747,6 +1998,7 @@ function applyView(v) {
   else if (v === 'userSettings')      renderUserSettings();
   else if (v === 'users')             renderUsersView();
   else if (v === 'admin-workspaces')  renderAdminWorkspacesView();
+  else if (v === 'admin-network')     renderNetworkBaselineView();
   else if (v === 'orgs')              renderOrgsView();
   else if (v === 'org-detail')        renderOrgDetailView();
 }
@@ -1772,6 +2024,12 @@ window.app = {
   setWsFilter(key, val) {
     state.wsFilter[key] = val;
     renderIgloosView(document.getElementById('ws-search')?.value || '', { noAnim: true });
+  },
+
+  resetWsSearch() {
+    state.wsFilter = { status: null, templateId: null };
+    renderIgloosView('', { noAnim: true });
+    document.getElementById('ws-search')?.focus();
   },
 
   clearWsFilter() {
@@ -1955,8 +2213,12 @@ window.app = {
       }
     }
     const vars = collectWsVars();
+    let guard = null;
+    if (document.getElementById('ws-guard')?.style.display !== 'none' && document.getElementById('ws-guarded')?.checked) {
+      guard = { allow: document.getElementById('ws-guard-allow').value.split(/[\n,]/).map(x => x.trim()).filter(Boolean) };
+    }
     try {
-      const ws = await api.workspaces.create(name, selectedTemplateId, vars);
+      const ws = await api.workspaces.create(name, selectedTemplateId, vars, guard);
       document.getElementById('new-ws-modal')?.remove();
       state.workspaces.unshift(ws);
       state.selectedWsId = ws.id;
@@ -2028,10 +2290,13 @@ window.app = {
     selectedTemplateId = id;
     const grid = document.getElementById('modal-templates');
     if (grid) grid.innerHTML = state.templates.map(t => renderTemplateCard(t, t.id === id)).join('');
+    const guardEl = document.getElementById('ws-guard'); // only the Kubernetes template runs behind the gateway
+    if (guardEl) guardEl.style.display = state.templates.find(t => t.id === id)?.provider === 'kubernetes' ? '' : 'none';
     const varsEl = document.getElementById('ws-vars');
     if (varsEl) {
       const tpl = state.templates.find(t => t.id === id);
       varsEl.innerHTML = renderTemplateVarForm(tpl);
+      syncGuardImage();
     }
   },
 
@@ -2158,6 +2423,33 @@ window.app = {
     try { await api.admin.updateUser(id, { is_admin: false }); toast('Admin removed', 'success'); renderUsersView(); }
     catch(e) { toast(e.message, 'error'); }
   },
+  async changePassword() {
+    const cur = document.getElementById('pw-current').value;
+    const next = document.getElementById('pw-new').value;
+    if (next !== document.getElementById('pw-again').value) { toast('The new passwords do not match', 'error'); return; }
+    try {
+      const { token } = await api.auth.changePassword(cur, next);
+      localStorage.setItem('igloo_token', token); // the old session just ended; carry on with the new one
+      toast('Password updated. Other sessions were signed out.', 'success');
+      renderUserSettings('security');
+    } catch(e) { toast(e.message, 'error'); }
+  },
+
+  async addUser() {
+    const name = prompt('Name of the new user'); if (!name) return;
+    const email = prompt('Their email address'); if (!email) return;
+    const password = prompt('A first password for them (8 to 72 characters). They can change it in Settings.'); if (!password) return;
+    try { await api.admin.createUser({ name, email, password }); toast('User created', 'success'); renderUsersView(); }
+    catch(e) { toast(e.message, 'error'); }
+  },
+
+  async resetUserPassword(id, name) {
+    const next = prompt(`New password for ${name} (8 to 72 characters). Their open sessions will end.`);
+    if (next === null) return;
+    try { await api.admin.resetPassword(id, next); toast('Password reset', 'success'); }
+    catch(e) { toast(e.message, 'error'); }
+  },
+
   async deleteUserAdmin(id, name) {
     if (!confirm(`Delete user "${name}"? This cannot be undone.`)) return;
     try { await api.admin.deleteUser(id); toast('User deleted'); renderUsersView(); }
@@ -2221,6 +2513,21 @@ window.app = {
       state.user = user;
       renderSettingsView();
       toast('Tailscale key cleared');
+    } catch(e) { toast('Failed: ' + e.message, 'error'); }
+  },
+
+  async saveGuardBaseline() {
+    const list = (id) => document.getElementById(id).value.split('\n').map(x => x.trim()).filter(Boolean);
+    try {
+      await api.guardBaseline.save({
+        mode: document.getElementById('bl-mode').value,
+        deny: list('bl-deny'), ceiling: document.getElementById('bl-mode').value === 'open' ? [] : list('bl-ceiling'),
+        max_sandbox_ttl_seconds: parseInt(document.getElementById('bl-ttl').value, 10) || 0,
+        forbid_private: document.getElementById('bl-private').checked,
+        require_guard: document.getElementById('bl-require').checked,
+      });
+      toast('Network baseline saved', 'success');
+      renderIntegrationsView();
     } catch(e) { toast('Failed: ' + e.message, 'error'); }
   },
 
@@ -2293,6 +2600,30 @@ window.app = {
     if (!ws) return;
     const pane = document.getElementById('ws-detail-pane');
     if (pane) pane.innerHTML = renderWorkspaceDetail(ws);
+  },
+
+  async _loadActivity(id) {
+    const refresh = async () => {
+      const body = document.getElementById('activity-body');
+      if (!body) return false;                       // panel closed or another tab: stop refreshing
+      try {
+        const [events, pol] = await Promise.all([api.workspaces.activity(id), api.workspaces.guardPolicy(id)]);
+        const p = pol.policy || {};
+        const allow = (p.allow || []).map(h => `<code>${esc(h)}</code>`).join(' ') || '<span class="activity-none">nothing</span>';
+        const routes = (p.routes || []).map(r => `<code>${esc(r.name)}</code>`).join(' ');
+        document.getElementById('activity-policy').innerHTML =
+          `<div><span class="activity-label">Can reach</span> ${allow}${p.allow_private ? ' <span class="activity-warn">including internal addresses</span>' : ''}</div>` +
+          (routes ? `<div><span class="activity-label">Credential routes</span> ${routes}</div>` : '');
+        body.innerHTML = renderActivityRows(events);
+        const denied = events.filter(e => e.decision === 'deny').length;
+        document.getElementById('activity-meta').textContent = `${events.length} recent · ${denied} blocked`;
+      } catch (e) {
+        body.innerHTML = `<div class="activity-empty"><div class="activity-empty-title">Couldn’t load activity</div><div class="activity-empty-hint">${esc(e.message || '')}</div></div>`;
+      }
+      return true;
+    };
+    if (!(await refresh())) return;
+    const iv = setInterval(async () => { if (!(await refresh())) clearInterval(iv); }, 5000);
   },
 
   async _loadLogsInline(id, type) {
@@ -2654,7 +2985,7 @@ function renderLogin(errorMsg) {
                onkeydown="if(event.key==='Enter')handleLogin()" />
       </div>
       <button class="btn btn-primary" onclick="handleLogin()" id="login-btn">Sign in</button>
-      <div class="auth-footer">Don't have an account? <a href="javascript:void(0)" onclick="renderRegister()">Create one →</a></div>` : '';
+      ${cfg.signup_enabled ? `<div class="auth-footer">Don't have an account? <a href="javascript:void(0)" onclick="renderRegister()">Create one</a></div>` : `<div class="auth-footer">Need an account? Ask your admin to create one.</div>`}` : '';
     document.getElementById('root').innerHTML = `
     <div class="auth-page">
       <div class="auth-logo">

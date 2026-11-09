@@ -86,6 +86,8 @@ type ddbUser struct {
 	IsAdmin          bool      `dynamodbav:"is_admin"`
 	LoginType        string    `dynamodbav:"login_type"`
 	CreatedAt        time.Time `dynamodbav:"created_at"`
+
+	PasswordChangedAt time.Time `dynamodbav:"password_changed_at"`
 }
 
 type ddbRef struct {
@@ -388,7 +390,7 @@ func userToItem(u *models.User) ddbUser {
 		PK: userPK(u.ID), SK: userPK(u.ID), Type: "user",
 		ID: u.ID, Email: u.Email, Name: u.Name,
 		PasswordHash: u.PasswordHash, TailscaleAuthKey: u.TailscaleAuthKey,
-		IsAdmin: u.IsAdmin, LoginType: u.LoginType, CreatedAt: u.CreatedAt,
+		IsAdmin: u.IsAdmin, LoginType: u.LoginType, CreatedAt: u.CreatedAt, PasswordChangedAt: u.PasswordChangedAt,
 	}
 }
 
@@ -396,7 +398,7 @@ func itemToUser(i ddbUser) *models.User {
 	return &models.User{
 		ID: i.ID, Email: i.Email, Name: i.Name,
 		PasswordHash: i.PasswordHash, TailscaleAuthKey: i.TailscaleAuthKey,
-		IsAdmin: i.IsAdmin, LoginType: i.LoginType, CreatedAt: i.CreatedAt,
+		IsAdmin: i.IsAdmin, LoginType: i.LoginType, CreatedAt: i.CreatedAt, PasswordChangedAt: i.PasswordChangedAt,
 	}
 }
 

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"os"
@@ -190,6 +191,23 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	if orgID := ctxOrgID(r); orgID != "" && t.OrgID != orgID {
 		h.err(w, http.StatusForbidden, "template does not belong to this organization")
+		return
+	}
+	// Stopping or destroying a workspace needs its template's Terraform files, so a
+	// template that workspaces still use must not disappear underneath them.
+	inUse, err := h.Store.ListWorkspaces(r.Context(), "", "")
+	if err != nil {
+		h.err(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	n := 0
+	for _, ws := range inUse {
+		if ws.TemplateID == id {
+			n++
+		}
+	}
+	if n > 0 {
+		h.err(w, http.StatusConflict, fmt.Sprintf("template is used by %d workspace(s) — delete them first", n))
 		return
 	}
 	if err := h.Store.DeleteTemplate(r.Context(), id); err != nil {

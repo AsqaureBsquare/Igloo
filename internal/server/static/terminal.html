@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; background: #020c18; overflow: hidden; font-family: 'JetBrains Mono', monospace; }
+    html, body { height: 100%; background: #0e1b28; overflow: hidden; font-family: 'JetBrains Mono', monospace; }
 
     .term-chrome {
       display: flex;
@@ -21,8 +21,8 @@
       justify-content: space-between;
       padding: 0 16px;
       height: 40px;
-      background: #030f1f;
-      border-bottom: 1px solid rgba(99,210,255,0.1);
+      background: #0e1b28;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
       flex-shrink: 0;
     }
 
@@ -32,25 +32,25 @@
       gap: 8px;
       font-size: 12px;
       font-weight: 500;
-      color: #4a7a9b;
+      color: #7f9aad;
       letter-spacing: 0.03em;
     }
 
     .term-title svg { opacity: 0.6; }
 
     .term-name {
-      color: #c8e8ff;
+      color: #c9dde8;
       font-weight: 600;
     }
 
     .term-status {
       width: 7px; height: 7px;
       border-radius: 50%;
-      background: #4a7a9b;
+      background: #7f9aad;
       flex-shrink: 0;
       transition: background 0.3s;
     }
-    .term-status.connected { background: #00ffb3; box-shadow: 0 0 5px #00ffb3; }
+    .term-status.connected { background: #22c55e; box-shadow: 0 0 5px #22c55e; }
 
     .term-body {
       flex: 1;
@@ -95,13 +95,13 @@
     fontSize:     13,
     lineHeight:   1.4,
     theme: {
-      background: '#020c18', foreground: '#c8e8ff', cursor: '#00d4ff',
-      selectionBackground: 'rgba(0,212,255,0.2)',
-      black: '#071828', red: '#ff3d6b', green: '#00ffb3', yellow: '#ffc400',
-      blue: '#00d4ff', magenta: '#9d5cff', cyan: '#00e5cc', white: '#c8e8ff',
-      brightBlack: '#1c3550', brightRed: '#ff6b8a', brightGreen: '#33ffc1',
+      background: '#0e1b28', foreground: '#c9dde8', cursor: '#8ad1f0',
+      selectionBackground: 'rgba(138,209,240,0.2)',
+      black: '#16293a', red: '#ef4444', green: '#22c55e', yellow: '#ffc400',
+      blue: '#8ad1f0', magenta: '#a78bfa', cyan: '#8ad1f0', white: '#c9dde8',
+      brightBlack: '#22394d', brightRed: '#f87171', brightGreen: '#33ffc1',
       brightYellow: '#ffd54f', brightBlue: '#40e0ff', brightMagenta: '#b57bff',
-      brightCyan: '#40f0d8', brightWhite: '#e2f0ff',
+      brightCyan: '#40f0d8', brightWhite: '#e6f1f7',
     },
   });
 

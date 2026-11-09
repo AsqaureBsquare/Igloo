@@ -1,3 +1,15 @@
+# ─── Global ───────────────────────────────────────────────────────────────────
+global:
+  # Point every Igloo image at an internal registry or mirror, e.g.
+  #   imageRegistry: registry.example.com/mirror
+  # replaces the registry host of each image (ghcr.io/org/app:tag -> registry.example.com/mirror/org/app:tag)
+  # and prefixes images that have none (postgres:16-alpine -> registry.example.com/mirror/postgres:16-alpine).
+  # Empty keeps every image as written below.
+  imageRegistry: ""
+  # Names of existing image-pull Secrets (kubectl create secret docker-registry ...) used by
+  # the server, provisioner and bundled Postgres pods.
+  imagePullSecrets: []
+
 # ─── Server (control plane) ───────────────────────────────────────────────────
 server:
   image:
@@ -10,6 +22,27 @@ server:
 
   # Use in-memory store instead of DynamoDB (useful for local/minikube dev)
   localMode: false
+
+  # Local development only: serve the web UI from a host directory so edits show
+  # up on browser refresh without rebuilding the image, e.g.
+  #   hostPath: /Users/you/Igloo/internal/server/static
+  devUI:
+    hostPath: ""
+
+  # Only the first account can self-register unless this is true; otherwise an
+  # admin creates users. Leave false in production.
+  allowSignup: false
+
+  # Image sandboxes (POST /api/sandboxes) run unless the caller names one. A sandbox behind the
+  # egress gateway cannot install anything while it starts, so this image must already contain
+  # curl and the tools your code needs. Igloo's workspace image does:
+  #   ghcr.io/asqaurebsquare/igloo-workspace:latest
+  # Empty = the template's default image.
+  sandboxImage: ""
+
+  # Comma-separated browser origins allowed to call the API cross-origin.
+  # Empty (default) = same-origin only. The bundled UI and the CLI don't need this.
+  corsOrigins: ""
 
   # Required — generate with: openssl rand -hex 32
   jwtSecret: ""
@@ -80,6 +113,49 @@ server:
   tolerations: []
   affinity: {}
 
+# ─── Egress gateway (igloo-guard) ─────────────────────────────────────────────
+# Workspaces created with a guard policy send all their outbound traffic through this
+# gateway, which enforces the policy, adds credentials the workspace never holds, and
+# records every decision (see the Activity view). Off by default.
+guard:
+  enabled: false
+  image:
+    repository: ghcr.io/asqaurebsquare/igloo-guard
+    tag: latest
+    pullPolicy: Always
+  replicas: 1
+  port: 3128
+  # Shared secret between the server and the gateway. Empty = generated once and kept.
+  key: ""
+  # Secrets the gateway may inject into upstream requests, by name. A route in a workspace's
+  # policy refers to one of these names; the values never reach the Igloo database or the
+  # workspace. Prefer existingSecret so values stay out of your Helm values.
+  secrets: {}
+  # Name of an existing Secret whose keys are the secret names (used instead of `secrets`).
+  existingSecret: ""
+  resources:
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {memory: 256Mi}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+# ─── Bundled PostgreSQL ───────────────────────────────────────────────────────
+# Deployed (with a persistent volume) when no external database is configured and
+# server.localMode is false. Use server.database.postgresURL for RDS/Cloud SQL etc.
+postgresql:
+  enabled: true
+  image: postgres:16-alpine
+  storageClass: ""
+  storageSize: 5Gi
+  password: ""   # empty = generated once, kept across upgrades
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
 # ─── Provisioner (job executor) ───────────────────────────────────────────────
 provisioner:
   image:
@@ -91,6 +167,10 @@ provisioner:
 
   # Number of concurrent Terraform jobs per pod
   concurrency: 10
+
+  # On stop or upgrade the provisioner stops taking jobs and lets running Terraform
+  # finish for up to this long (seconds) before Kubernetes kills it.
+  terminationGracePeriodSeconds: 1800
 
   # Required — provisioner key token (generate with: openssl rand -hex 32)
   key: ""
@@ -108,7 +188,10 @@ provisioner:
     ecsTaskRoleArn: ""
     ecsSubnets: ""        # comma-separated subnet IDs
     ecsSecurityGroup: ""
+    # S3 bucket for Terraform state, or "local" to keep state on a PVC (no AWS needed)
     tfStateBucket: ""
+    stateStorageClass: ""
+    stateStorageSize: 1Gi
 
   serviceAccount:
     create: true

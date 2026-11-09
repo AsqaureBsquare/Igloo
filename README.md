@@ -183,8 +183,8 @@ web UI shows each guarded workspace's activity.
 
 What this does not do: HTTPS to an allowed host is allowed or refused by name, not decrypted, so there is
 no per-path policy; an allowed destination can still be misused (for example pushing data to an allowed
-code host); and there is no organisation-wide baseline policy yet. It narrows exposure and records it; it
-does not make an agent safe.
+code host). It narrows exposure and records it; it does not make an agent safe. Organisation-wide
+rules are covered by the baseline below.
 
 ### Organisation-wide baseline
 

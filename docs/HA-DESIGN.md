@@ -1,6 +1,9 @@
 # Running more than one server replica
 
-Status: design, not built. Nothing here changes behaviour until it is implemented.
+Status: phase 1 built (owner lease + relay forwarding for exec/files/HTTP, behind
+`IGLOO_INTERNAL_ADDR`; concurrent-start migration deadlock fixed with an advisory lock).
+Phases 2–6 remain design. A single replica without `IGLOO_INTERNAL_ADDR` behaves exactly
+as before.
 
 ## Why
 
@@ -63,8 +66,13 @@ Details for option 3:
 
 ## Phases
 
-1. Owner table and lease, relay forwarding for exec/files/HTTP (`Subscribe`/`SendToAgent`), tests with
-   two in-process relays. This is the part everything else depends on.
+1. **Done.** Owner table and lease, relay forwarding for exec/files/HTTP (`Subscribe`/`SendToAgent`),
+   tests with two in-process relays — plus a live check with two real server processes on one
+   Postgres. Enabled per replica by `IGLOO_INTERNAL_ADDR` (the pod address peers dial, e.g.
+   `$(POD_IP):8081` from the downward API); `IGLOO_INTERNAL_PORT` (default 8081) is the internal
+   listener, `IGLOO_REPLICA_ID` defaults to the hostname, and peers authenticate with a key derived
+   from the shared JWT secret. Terminals already work across replicas (they ride the same relay);
+   their dedicated phase-2 concerns are reconnect behaviour and port-forward edge cases.
 2. Terminals (browser WebSocket) and port-forward through the owner.
 3. Tailnet coordinator through the owner.
 4. Job dispatch sweep; log buffer; device codes; first-user lock; per-workspace job exclusion.

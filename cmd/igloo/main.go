@@ -64,7 +64,7 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Print(`igloo — serverless dev workspaces
+	fmt.Print(`igloo — workspaces for AI agents and humans
 
 Usage:
   igloo server [--port 8080] [--local]     Start the control plane

@@ -2790,7 +2790,7 @@ function renderRegister() {
     </div>
     <div class="auth-card">
       <h1>Build your first igloo</h1>
-      <p>Serverless dev workspaces that sleep to $0 when idle.</p>
+      <p>Workspaces for AI agents and humans — guarded, brokered, audited.</p>
       <div class="auth-error" id="auth-err"></div>
       <div class="field">
         <label>Full name</label>

@@ -1,103 +1,150 @@
 # Igloo
 
-**Serverless dev workspaces. Pay per active minute, not per month.**
+**Self-hosted workspaces for AI agents and humans — network-guarded, credential-brokered, audited.**
 
-Igloo gives every developer a persistent cloud workspace that auto-sleeps when idle and wakes in ~15 seconds — disk and state intact. Deploy it anywhere: AWS ECS, any Kubernetes cluster, or your own servers.
+Igloo runs code you don't fully trust — an AI agent, a job from a queue, a contractor's build — in isolated workspaces on your own Kubernetes cluster. A guarded workspace can only reach the hosts its policy allows, through an egress gateway that injects credentials the workspace never holds and records every connection it allowed or refused. The same platform gives your developers persistent cloud workspaces that sleep when idle and wake in ~15 seconds.
 
-> **Beta** — core functionality works. APIs may change before v1.0.
+> **Beta** — core functionality works and is tested end to end. APIs may change before v1.0.
 
 ---
 
 ## Why Igloo
 
-| | Traditional (Coder, EC2) | Igloo |
-|---|---|---|
-| Idle cost | Full VM price 24/7 | **$0 when sleeping** |
-| Wake time | Cold start (1-3 min) | **~15 seconds** |
-| Deploy target | Single region | **Global — provisioners anywhere** |
-| Self-host complexity | PostgreSQL + server + proxy | **Single binary** |
-| Connectivity | VPN / WireGuard | **Plain WebSocket (443)** |
+Teams adopting AI agents hit the same two questions: *what can this thing reach?* and *what did it do?* Igloo answers both on your own infrastructure:
+
+- **Egress control by default.** A sandbox starts with a policy that allows nothing. You list the hosts it may reach; the network enforces it (Kubernetes NetworkPolicy — bypassing the proxy gets a closed network, and guarded workspaces have no DNS of their own).
+- **Credentials the workload never sees.** Declare a route (`llm → api.example.com, header Authorization, secret LLM_KEY`); the workspace calls the gateway with a scoped token and the gateway injects the real key. Keys never enter the container, its env, or your database.
+- **A record of everything.** Every allowed and refused connection is an audit event you can read per workspace, in the UI or the API.
+- **Self-hosted, one Helm install.** Single Go binary, bundled Postgres or your own, no SaaS, no per-seat pricing. Your cluster, your data, your policies.
+- **Humans too.** The same workspaces serve developers: VS Code and terminal in the browser, SSH, auto-sleep when idle (~$0 compute), ~15s wake with disk intact.
+
+How this compares: cloud sandbox services (E2B, Daytona, Modal) run your agents on *their* infrastructure; dev-workspace platforms (Coder) manage workspaces but have no egress gateway, credential broker, or network audit; LLM proxies broker credentials but don't isolate the workload. Igloo packages all of it, self-hosted.
+
+---
+
+## Sandboxes in 30 seconds
+
+```python
+from igloo_sandbox import Sandbox   # clients/python — stdlib only; IGLOO_URL and IGLOO_TOKEN in env
+
+with Sandbox.create(allow=["api.example.com"]) as sb:
+    sb.write_file("job.sh", "echo working")
+    print(sb.exec(["sh", "job.sh"]).stdout)
+    print(sb.activity())            # what the gateway allowed and blocked
+```
+
+`POST /api/sandboxes` creates a workspace for code: run commands, read and write files, and it deletes itself when its time is up. With no options it sits behind the gateway with a policy that allows **nothing**. `python3 examples/agent_demo.py` walks the whole flow.
+
+A policy with a credential route:
+
+```json
+{"allow": ["api.example.com", "*.pypi.org"],
+ "routes": [{"name": "llm", "upstream": "https://api.example.com", "header": "Authorization",
+             "prefix": "Bearer ", "secret": "LLM_KEY"}]}
+```
+
+The workspace calls `$IGLOO_ROUTE_BASE/llm/...` presenting `$IGLOO_ROUTE_TOKEN`; the gateway swaps in the real `LLM_KEY`. Policies change without a restart (~15 seconds). The **Network** tab in the web UI shows each guarded workspace's activity live.
 
 ---
 
 ## How it works
 
 ```
-Developer → igloo CLI / browser
-               ↓
-         igloo server  (single Go binary, stateless)
-               ↓
-         Provisioner daemons  (dial in from any region)
-               ↓
-         Workspace (Fargate task / Kubernetes pod)
-               ↑
-         igloo-agent (WebSocket tunnel, no inbound ports)
+Agent / developer → igloo CLI, browser, or sandbox API
+                       ↓
+                 igloo server  (single Go binary)
+                       ↓
+                 Provisioner daemons  (dial in from any region)
+                       ↓
+          Workspace pod ──allowed hosts only──► igloo-guard (egress gateway)
+                 ↑                                   │ injects credentials,
+          igloo-agent (outbound WebSocket,           │ records every decision
+          no inbound ports)                          ▼
+                                               the internet
 ```
 
-1. **Create** — provisioner runs Terraform to spin up a workspace container
-2. **Use** — terminal and VS Code proxy through igloo-agent over WebSocket
-3. **Idle** — workspace auto-sleeps after inactivity; compute stops, disk persists
-4. **Wake** — first request reschedules the container; disk remounts in ~15s
-
-Provisioner daemons connect **outbound** to the server — deploy them in any private VPC, any cloud, any region. No inbound firewall rules required.
+1. **Create** — a provisioner runs Terraform to start the workspace container
+2. **Confine** — a NetworkPolicy lets a guarded pod talk only to the Igloo server and the gateway; it has no DNS and no service-account token
+3. **Use** — terminal, VS Code, and the sandbox API travel over outbound WebSockets (port 443, no VPN, no inbound rules)
+4. **Sleep / wake** — idle workspaces scale to zero, disk persists, first request wakes them in ~15s
 
 ---
 
 ## Quickstart (Kubernetes / Helm)
 
+The gateway needs a cluster that enforces NetworkPolicy (Cilium, Calico, GKE Dataplane V2, k3s, or the policy agents on EKS/AKS). `helm test igloo` proves yours does — run it.
+
 ```bash
-helm install igloo oci://ghcr.io/asquarebsquare/igloo \
-  --version 0.1.1 \
+git clone https://github.com/AsqaureBsquare/Igloo
+cd Igloo
+
+helm install igloo charts/igloo \
   --set server.jwtSecret=$(openssl rand -hex 32) \
-  --set provisioner.psk=$(openssl rand -hex 32) \
+  --set provisioner.key=$(openssl rand -hex 32) \
+  --set guard.enabled=true \
   --set server.serverURL=https://igloo.yourdomain.com \
   --set server.ingress.enabled=true \
   --set server.ingress.className=nginx \
   --set server.ingress.host=igloo.yourdomain.com
+
+helm test igloo   # proves the cluster actually enforces NetworkPolicy
 ```
 
-For local testing (no AWS, in-memory store):
+Notes:
 
-```bash
-helm install igloo oci://ghcr.io/asquarebsquare/igloo \
-  --version 0.1.1 \
-  --set server.jwtSecret=$(openssl rand -hex 32) \
-  --set provisioner.psk=$(openssl rand -hex 32) \
-  --set server.localMode=true
+- **Gateway secrets:** put upstream keys in a Kubernetes Secret and point `guard.existingSecret` at it — values never reach Igloo's database.
+- **Sandbox image:** sandboxes cannot install packages at start-up (no network), so give them an image that has what they need: `--set server.sandboxImage=ghcr.io/asqaurebsquare/igloo-workspace:latest`.
+- **No default StorageClass** (bare EKS, some bare-metal): set `postgresql.storageClass` and `provisioner.workspace.stateStorageClass`.
+- A published OCI chart exists (`oci://ghcr.io/asquarebsquare/igloo`) but currently lags this repository; install from source until the next chart release.
+
+### Organisation-wide baseline
+
+An administrator sets rules every workspace and sandbox policy must stay inside — **Network baseline** in the admin menu, or `PUT /api/admin/guard-baseline`:
+
+```json
+{
+  "mode": "restricted",                    // or "open": reach anything not denied
+  "deny": ["*.pastebin.example"],          // never reachable, wins over any allow
+  "ceiling": ["*.corp.example"],           // optional: nothing outside these may be allowed
+  "forbid_private": true,                  // no private/internal addresses
+  "require_guard": true,                   // every new workspace runs behind the gateway
+  "max_sandbox_ttl_seconds": 3600
+}
 ```
+
+A policy that breaks the baseline is refused with a 403 saying why. Tightening the baseline applies to existing workspaces within seconds — the gateway asks the server what a workspace may do, and the answer has the baseline applied (`GET .../guard-policy` shows the `effective` policy). In **open** mode a workspace reaches everything except the deny list; credentials, audit, and private-address blocking still apply.
+
+### What the guard layer does not do
+
+HTTPS to an allowed host is allowed or refused **by name, not decrypted** — there is no per-path policy. An allowed destination can still be misused (data pushed to an allowed code host). Workspaces are container-isolated, not VM-isolated — for hostile multi-tenant workloads, use a hardened runtime underneath. It narrows exposure and records it; it does not make an agent safe.
 
 ---
 
-## CLI
+## Developer workspaces
 
-**macOS (Apple Silicon)**
+| | Traditional (Coder, EC2) | Igloo |
+|---|---|---|
+| Idle cost | Full VM price 24/7 | **$0 when sleeping** |
+| Wake time | Cold start (1–3 min) | **~15 seconds** |
+| Deploy target | Single region | **Provisioners anywhere** |
+| Self-host | PostgreSQL + server + proxy | **Single binary** |
+| Connectivity | VPN / WireGuard | **Plain WebSocket (443)** |
+
+Sleep scales the deployment to zero (Kubernetes) or stops the Fargate task (ECS); the disk persists. Wake reschedules and remounts — no Terraform re-run.
+
+### CLI
+
 ```bash
+# macOS (Apple Silicon) — see Releases for other platforms
 curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0-beta.1_darwin_arm64.tar.gz | tar xz
 sudo mv igloo /usr/local/bin/
-```
 
-**macOS (Intel)**
-```bash
-curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0-beta.1_darwin_amd64.tar.gz | tar xz
-sudo mv igloo /usr/local/bin/
-```
-
-**Linux**
-```bash
-curl -sSL https://github.com/AsqaureBsquare/Igloo/releases/latest/download/igloo_0.1.0-beta.1_linux_amd64.tar.gz | tar xz
-sudo mv igloo /usr/local/bin/
-```
-
-**Login and SSH into a workspace**
-```bash
 igloo login https://igloo.yourdomain.com you@example.com
 
-# Add to ~/.ssh/config:
-# Host igloo-*
-#   ProxyCommand igloo proxy %h
-#   User root
-#   StrictHostKeyChecking no
-
+# ~/.ssh/config:
+#   Host igloo-*
+#     ProxyCommand igloo proxy %h
+#     User root
 ssh igloo-<workspace-id>
 ```
 
@@ -112,12 +159,11 @@ ssh igloo-<workspace-id>
 | `PORT` | `8080` | HTTP listen port |
 | `IGLOO_JWT_SECRET` | — | 32-byte hex secret (required) |
 | `IGLOO_PROVISIONER_PSK` | — | Pre-shared key for provisioner daemons |
-| `AWS_REGION` | `us-east-1` | DynamoDB region |
-| `IGLOO_DYNAMO_*_TABLE` | — | DynamoDB table names |
 | `IGLOO_OIDC_ISSUER_URL` | — | Enable OIDC SSO (any compliant IdP) |
 | `IGLOO_DISABLE_PASSWORD_AUTH` | `false` | Force SSO-only login |
+| `AWS_REGION` | `us-east-1` | DynamoDB region (DynamoDB store only) |
 
-Run with `--local` to use an in-memory store (no AWS required).
+Run with `--local` for an in-memory store (no database required). The Helm chart bundles PostgreSQL by default; `server.database.postgresURL` points at your own.
 
 ### Provisioner daemon
 
@@ -126,116 +172,28 @@ Run with `--local` to use an in-memory store (no AWS required).
 | `IGLOO_SERVER_URL` | URL of the igloo server |
 | `IGLOO_PROVISIONER_PSK` | Must match server PSK |
 | `IGLOO_WORKER_CONCURRENCY` | Parallel Terraform jobs (default: 10) |
-| `AWS_REGION` | Region for workspace resources |
-| `IGLOO_ECS_CLUSTER` | ECS cluster for Fargate workspaces |
-| `IGLOO_TF_STATE_BUCKET` | S3 bucket for Terraform state |
+| `IGLOO_WORKSPACE_NAMESPACE` | Namespace workspace pods run in (default: `workspaces`) |
+| `IGLOO_ECS_CLUSTER` | ECS cluster, for Fargate workspaces |
+| `IGLOO_TF_STATE_BUCKET` | S3 bucket for Terraform state, or `local` for a PVC |
+
+Provisioner daemons connect **outbound** to the server — deploy them in any private VPC, any cloud, any region. No inbound firewall rules.
 
 ---
-
-## Sandboxes and the egress gateway
-
-Igloo can run code, including AI agents, in an isolated workspace whose network access you control,
-with a record of everything it did. Two parts:
-
-- **The egress gateway** (`igloo-guard`). A workspace created with a guard policy can only reach the Igloo
-  server and the gateway (a Kubernetes network policy enforces this, so ignoring the proxy settings
-  gets it nowhere). It has no DNS: the gateway looks up the names it is asked for, and the two
-  addresses the workspace needs are written into its hosts file. The gateway allows the hosts you list, refuses everything else, adds
-  credentials the workspace never holds, and reports every decision.
-- **Sandboxes.** `POST /api/sandboxes` creates a workspace for code: run commands, read and write files,
-  and it deletes itself after its lifetime. With no options it is behind the gateway with a policy that
-  allows nothing.
-
-Turn the gateway on in the chart (it is off by default). It needs a cluster that enforces NetworkPolicy
-(Cilium, Calico, GKE Dataplane V2, or the policy add-on on EKS/AKS); run `helm test <release>` after
-installing to prove yours does.
-
-```yaml
-guard:
-  enabled: true
-  existingSecret: my-gateway-secrets   # keys are secret names, e.g. UPSTREAM_KEY; values never reach Igloo's database
-server:
-  sandboxImage: ghcr.io/asqaurebsquare/igloo-workspace:latest   # sandboxes cannot install anything while starting
-```
-
-Use it from Python (standard library only; see `clients/python`):
-
-```python
-from igloo_sandbox import Sandbox   # IGLOO_URL and IGLOO_TOKEN in the environment
-
-with Sandbox.create(allow=["api.example.com"]) as sb:
-    sb.write_file("job.sh", "echo working")
-    print(sb.exec(["sh", "job.sh"]).stdout)
-    print(sb.activity())            # what the gateway allowed and blocked
-```
-
-`python3 examples/agent_demo.py` walks through it end to end. A policy looks like this:
-
-```json
-{"allow": ["api.example.com", "*.pypi.org"],
- "routes": [{"name": "llm", "upstream": "https://api.example.com", "header": "Authorization",
-             "prefix": "Bearer ", "secret": "LLM_KEY"}]}
-```
-
-A workspace reaches a route at `$IGLOO_ROUTE_BASE/llm/...` presenting `$IGLOO_ROUTE_TOKEN`; the gateway
-swaps in the real `LLM_KEY`. Policies change without a restart (about 15 seconds). The Network tab in the
-web UI shows each guarded workspace's activity.
-
-What this does not do: HTTPS to an allowed host is allowed or refused by name, not decrypted, so there is
-no per-path policy; an allowed destination can still be misused (for example pushing data to an allowed
-code host). It narrows exposure and records it; it does not make an agent safe. Organisation-wide
-rules are covered by the baseline below.
-
-### Organisation-wide baseline
-
-An administrator can set rules that every workspace and sandbox policy must stay inside, from
-**Network baseline** in the admin menu or `PUT /api/admin/guard-baseline`:
-
-```json
-{
-  "mode": "restricted",                    // or "open": every guarded workspace may reach anything not denied
-  "deny": ["*.pastebin.example"],          // never reachable, wins over any allow
-  "ceiling": ["*.corp.example"],           // optional: nothing outside these may be allowed
-  "forbid_private": true,                  // no allow_private
-  "require_guard": true,                   // every new workspace runs behind the gateway
-  "max_sandbox_ttl_seconds": 3600
-}
-```
-
-In **open** mode a workspace's own allow-list no longer matters: it can reach everything except the deny
-list, and private or internal addresses stay blocked while `forbid_private` is set. Credentials, audit and
-the deny list work as before. An open baseline cannot be combined with a ceiling.
-
-A policy that breaks the baseline is refused with a 403 saying why. The baseline is also applied
-when the gateway asks what a workspace may do, so tightening it takes effect for existing
-workspaces within seconds (the stored policy is not rewritten; `GET .../guard-policy` shows an
-`effective` policy next to it). Sandboxes older than a tightened lifetime cap are removed by the
-next expiry pass. Workspaces created without the gateway are not moved behind it.
 
 ## Docker images
 
 ```bash
 docker pull ghcr.io/asquarebsquare/igloo-server:latest
 docker pull ghcr.io/asquarebsquare/igloo-provisioner:latest
-docker pull ghcr.io/asquarebsquare/igloo-guard:latest   # the egress gateway (optional)
+docker pull ghcr.io/asquarebsquare/igloo-guard:latest       # the egress gateway
+docker pull ghcr.io/asquarebsquare/igloo-workspace:latest   # batteries-included workspace/sandbox image
 ```
 
-Images are built for `linux/amd64` and `linux/arm64`.
+Built for `linux/amd64` and `linux/arm64`.
 
 ---
 
 ## Architecture details
-
-### Workspace sleep/wake
-
-On **Kubernetes**: scale deployment to 0 replicas (pod deleted, PVC survives).  
-On **AWS ECS**: stop Fargate task (EBS volume persists, `deleteOnTermination: false`).
-
-Wake = reschedule pod/task + remount existing disk. No Terraform re-run. ~15s.
-
-### Provisioner dispatch
-
-Provisioner daemons hold open a WebSocket to the server and send "acquire" tokens (one per free worker slot). When a job is enqueued, the server instantly pops a waiting token and dispatches — **sub-millisecond latency**, zero idle polling.
 
 ### WebSocket relay
 
@@ -243,23 +201,15 @@ Provisioner daemons hold open a WebSocket to the server and send "acquire" token
 Browser ──WSS──► igloo server ◄──WSS── igloo-agent (inside workspace)
 ```
 
-Both browser and agent connect **outbound** to the server on port 443. No VPN, no WireGuard, no open inbound ports on workspaces. Works through any corporate firewall.
+Browser and agent both connect outbound on 443. No VPN, no WireGuard requirement, no open inbound ports on workspaces. Works through corporate firewalls.
 
----
+### Provisioner dispatch
 
-## Self-hosting on AWS ECS
+Daemons hold a WebSocket open and park "acquire" tokens (one per free worker slot). An enqueued job is pushed to a waiting token immediately — sub-millisecond dispatch, zero idle polling.
 
-Infrastructure templates are in `infra/ecs/`. Requires:
-- ECS cluster + Fargate
-- DynamoDB (workspaces, users, templates, jobs tables)
-- ECR for workspace images
-- S3 for Terraform state
+### AWS ECS
 
-```bash
-cd infra/ecs
-terraform init
-terraform apply
-```
+Terraform for an ECS/Fargate deployment is in `infra/ecs/` (DynamoDB store, EBS-persistent workspaces). Kubernetes is the primary target.
 
 ---
 
@@ -268,7 +218,8 @@ terraform apply
 ```bash
 git clone https://github.com/AsqaureBsquare/Igloo
 cd Igloo
-go run ./cmd/igloo server --local   # starts server with in-memory store
+go run ./cmd/igloo server --local   # in-memory store, no cluster needed
+go test ./...
 ```
 
 ---

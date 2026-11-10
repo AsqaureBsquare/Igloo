@@ -116,7 +116,7 @@ A policy that breaks the baseline is refused with a 403 saying why. Tightening t
 
 ### What the guard layer does not do
 
-HTTPS to an allowed host is allowed or refused **by name, not decrypted** — there is no per-path policy. An allowed destination can still be misused (data pushed to an allowed code host). Workspaces are container-isolated, not VM-isolated — for hostile multi-tenant workloads, use a hardened runtime underneath. It narrows exposure and records it; it does not make an agent safe.
+HTTPS to an allowed host is allowed or refused **by name, not decrypted** — there is no per-path policy. An allowed destination can still be misused (data pushed to an allowed code host). Workspaces are container-isolated by default; a workspace or sandbox can request a Kubernetes RuntimeClass (`runtime_class`, e.g. Kata Containers) for microVM isolation on nodes that provide one — and `server.sandboxRuntimeClass` makes that the default for every sandbox. It narrows exposure and records it; it does not make an agent safe.
 
 ---
 

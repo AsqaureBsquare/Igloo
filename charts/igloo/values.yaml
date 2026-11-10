@@ -39,6 +39,9 @@ server:
   #   ghcr.io/asqaurebsquare/igloo-workspace:latest
   # Empty = the template's default image.
   sandboxImage: ""
+  # RuntimeClass sandboxes run under unless the caller names one — e.g. "kata" for
+  # microVM isolation (every node that runs sandboxes must have the runtime installed).
+  sandboxRuntimeClass: ""
 
   # Comma-separated browser origins allowed to call the API cross-origin.
   # Empty (default) = same-origin only. The bundled UI and the CLI don't need this.

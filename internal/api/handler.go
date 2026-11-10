@@ -35,6 +35,9 @@ type Handler struct {
 	// sandbox cannot install anything at start-up (the gateway refuses package mirrors), so
 	// its image must already contain curl and the tools it needs; Igloo's workspace image does.
 	SandboxImage string
+	// SandboxRuntimeClass is the Kubernetes RuntimeClass sandboxes run under unless the caller
+	// names one — e.g. "kata" for microVM isolation on nodes that have it installed.
+	SandboxRuntimeClass string
 
 	regMu   sync.Mutex   // serialises registration so two "first users" can't both become admin
 	loginRL loginLimiter // throttles repeated failed password logins

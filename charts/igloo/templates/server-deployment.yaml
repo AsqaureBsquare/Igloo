@@ -73,6 +73,10 @@ spec:
             - name: IGLOO_SANDBOX_IMAGE
               value: {{ include "igloo.image" (dict "root" . "image" .Values.server.sandboxImage) | quote }}
             {{- end }}
+            {{- if .Values.server.sandboxRuntimeClass }}
+            - name: IGLOO_SANDBOX_RUNTIME_CLASS
+              value: {{ .Values.server.sandboxRuntimeClass | quote }}
+            {{- end }}
             {{- if .Values.guard.enabled }}
             - name: IGLOO_GUARD_KEY
               valueFrom:

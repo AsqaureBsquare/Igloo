@@ -93,6 +93,24 @@ resource "igloo_parameter" "disk" {
   }
 }
 
+resource "igloo_parameter" "runtime_class" {
+  name         = "runtime_class"
+  display_name = "Runtime"
+  description  = "Kubernetes RuntimeClass for the workspace pod. Name a microVM runtime such as \"kata\" (the nodes must have it installed) to give the workspace its own kernel; empty uses the cluster default (runc)."
+  type         = "string"
+  default      = ""
+  mutable      = false
+}
+
+resource "igloo_parameter" "gpu" {
+  name         = "gpu"
+  display_name = "GPUs"
+  description  = "NVIDIA GPUs to reserve for the workspace (the nodes need the device plugin). 0 for none."
+  type         = "string"
+  default      = "0"
+  mutable      = false
+}
+
 variable "desired_count" { default = "1" }
 
 # Egress gateway. The Igloo server fills these in for a workspace created with a guard
@@ -203,7 +221,9 @@ resource "kubernetes_deployment" "workspace" {
         # A workspace has no use for the Kubernetes API, so it gets no service-account token to steal.
         automount_service_account_token = false
         # Guarded: no DNS (see the data sources above). Lookups fail at once instead of waiting.
-        dns_policy = local.guarded ? "None" : "ClusterFirst"
+        # A microVM runtime (Kata) gives the pod its own kernel; null keeps the cluster default.
+        runtime_class_name = igloo_parameter.runtime_class.value != "" ? igloo_parameter.runtime_class.value : null
+        dns_policy         = local.guarded ? "None" : "ClusterFirst"
         dynamic "dns_config" {
           for_each = local.guarded ? [1] : []
           content {
@@ -242,6 +262,8 @@ resource "kubernetes_deployment" "workspace" {
               cpu    = igloo_parameter.cpu.value
               memory = igloo_parameter.memory.value
             }
+            # GPUs are reserved via limits; requests then match automatically.
+            limits = igloo_parameter.gpu.value != "0" ? { "nvidia.com/gpu" = igloo_parameter.gpu.value } : {}
           }
           volume_mount {
             name       = "data"

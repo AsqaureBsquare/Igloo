@@ -12,10 +12,15 @@ import (
 )
 
 func deleteTemplate(h *Handler, id string) *httptest.ResponseRecorder {
+	return deleteTemplateAs(h, "u-admin", id)
+}
+
+func deleteTemplateAs(h *Handler, userID, id string) *httptest.ResponseRecorder {
 	r := chi.NewRouter()
 	r.Delete("/api/templates/{id}", h.DeleteTemplate)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/templates/"+id, nil))
+	req := httptest.NewRequest(http.MethodDelete, "/api/templates/"+id, nil)
+	r.ServeHTTP(rec, req.WithContext(context.WithValue(req.Context(), ctxKeyUserID, userID)))
 	return rec
 }
 
@@ -23,6 +28,7 @@ func TestDeleteTemplateRefusedWhileWorkspacesUseIt(t *testing.T) {
 	h := newTestHandler()
 	ctx := context.Background()
 	now := time.Now()
+	h.Store.CreateUser(ctx, &models.User{ID: "u-admin", Email: "root@x.dev", IsAdmin: true, CreatedAt: now})
 	for _, tpl := range []*models.Template{
 		{ID: "used", Name: "used", CreatedAt: now},
 		{ID: "free", Name: "free", CreatedAt: now},
@@ -43,8 +49,10 @@ func TestDeleteTemplateRefusedWhileWorkspacesUseIt(t *testing.T) {
 	if rec := deleteTemplate(h, "free"); rec.Code != http.StatusNoContent {
 		t.Errorf("template with only deleted workspaces: %d, want 204", rec.Code)
 	}
-	if rec := deleteTemplate(h, "core"); rec.Code != http.StatusForbidden {
-		t.Errorf("builtin: %d, want 403", rec.Code)
+	// Deletion is admin-only, so an admin may also delete a builtin template (re-seeding
+	// restores the shipped ones at the next start). It still must not be in use.
+	if rec := deleteTemplate(h, "core"); rec.Code != http.StatusNoContent {
+		t.Errorf("builtin, unused, deleted by an admin: %d, want 204", rec.Code)
 	}
 	if rec := deleteTemplate(h, "missing"); rec.Code != http.StatusNotFound {
 		t.Errorf("missing: %d, want 404", rec.Code)

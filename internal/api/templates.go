@@ -75,9 +75,24 @@ func (h *Handler) GetTemplateFiles(w http.ResponseWriter, r *http.Request) {
 	h.json(w, http.StatusOK, files)
 }
 
+// requireTemplateAuthor allows org admins inside an org, and only site admins outside one.
+// A template is Terraform the provisioner executes with its own credentials, and a workspace
+// is only as confined as its template makes it — so writing one is an administrative act.
+func (h *Handler) requireTemplateAuthor(w http.ResponseWriter, r *http.Request) bool {
+	if o := ctxOrg(r); o != nil {
+		return requireOrgAdmin(h, w, r)
+	}
+	user, err := h.Store.GetUser(r.Context(), ctxUserID(r))
+	if err != nil || !user.IsAdmin {
+		h.err(w, http.StatusForbidden, "only an administrator can create or change templates: a template is code the provisioner runs")
+		return false
+	}
+	return true
+}
+
 // POST /api/templates
 func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
-	if o := ctxOrg(r); o != nil && !requireOrgAdmin(h, w, r) {
+	if !h.requireTemplateAuthor(w, r) {
 		return
 	}
 
@@ -121,7 +136,7 @@ func (h *Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 
 // PUT /api/templates/{id} — update template metadata + files
 func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
-	if o := ctxOrg(r); o != nil && !requireOrgAdmin(h, w, r) {
+	if !h.requireTemplateAuthor(w, r) {
 		return
 	}
 
@@ -175,7 +190,7 @@ func (h *Handler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
 
 // DELETE /api/templates/{id}
 func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
-	if o := ctxOrg(r); o != nil && !requireOrgAdmin(h, w, r) {
+	if !h.requireTemplateAuthor(w, r) {
 		return
 	}
 
@@ -185,11 +200,11 @@ func (h *Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusNotFound, "template not found")
 		return
 	}
-	if t.Builtin {
-		h.err(w, http.StatusForbidden, "cannot delete built-in template")
-		return
-	}
-	if orgID := ctxOrgID(r); orgID != "" && t.OrgID != orgID {
+	// Builtin templates used to be undeletable because deletion had no auth check; now that it
+	// is admin-only, an admin may delete any unused template. Inside an org, only site-wide
+	// (builtin) and the org's own templates are even reachable; the seeded templates come back
+	// when the server restarts with IGLOO_SEED_TEMPLATES=true.
+	if orgID := ctxOrgID(r); orgID != "" && !t.Builtin && t.OrgID != orgID {
 		h.err(w, http.StatusForbidden, "template does not belong to this organization")
 		return
 	}

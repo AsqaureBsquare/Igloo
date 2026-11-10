@@ -1,20 +1,38 @@
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /app
 COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -mod=vendor -ldflags="-s -w" -o igloo-agent ./cmd/agent
 
 FROM debian:bookworm-slim
+ARG TARGETARCH
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/home/user
 ENV WORKSPACE_DIR=/home/user
 
+# code-server is installed from a pinned release package whose SHA-256 is checked,
+# not from an unpinned install script. To upgrade: change the version and both digests
+# (sha256 of code-server_<version>_<arch>.deb from the release page).
+ARG CODE_SERVER_VERSION=4.145.2
+ARG CODE_SERVER_SHA256_ARM64=0fa9af7f602536b1e320a17d32bb1a85e4a924fdc09283898f1bea73d2a5c1e7
+ARG CODE_SERVER_SHA256_AMD64=7eddbdeaab34380bde3ac3bbadce58fe2f5722c4877f331ea593ae797c2517e1
+
+# curl stays installed: the workspace's init script uses it to fetch the agent from the
+# Igloo server and otherwise runs `apt-get install curl` on every start, which needs
+# the package mirror at runtime and slows every boot.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates openssh-server curl \
-    && curl -fsSL https://code-server.dev/install.sh | sh \
-    && apt-get purge -y --auto-remove curl \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
+    && arch="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && case "$arch" in \
+         arm64) sum="$CODE_SERVER_SHA256_ARM64" ;; \
+         amd64) sum="$CODE_SERVER_SHA256_AMD64" ;; \
+         *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+       esac \
+    && curl -fsSL -o /tmp/code-server.deb "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server_${CODE_SERVER_VERSION}_${arch}.deb" \
+    && echo "${sum}  /tmp/code-server.deb" | sha256sum -c - \
+    && apt-get install -y --no-install-recommends /tmp/code-server.deb \
+    && rm -rf /tmp/code-server.deb /var/lib/apt/lists/* /var/cache/apt/* /tmp/*
 
 RUN mkdir -p /run/sshd && \
     printf 'Port 22\nPermitRootLogin no\nPubkeyAuthentication yes\nPasswordAuthentication no\nAuthorizedKeysFile /home/user/.ssh/authorized_keys\nHostKey /home/user/.ssh/ssh_host_rsa_key\nHostKey /home/user/.ssh/ssh_host_ed25519_key\nStrictModes no\n' \

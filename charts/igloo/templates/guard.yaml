@@ -1,0 +1,141 @@
+{{- if .Values.guard.enabled }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "igloo.guard.fullname" . }}
+  labels:
+    {{- include "igloo.guard.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  key: {{ include "igloo.guard.key" . | quote }}
+{{- if and .Values.guard.secrets (not .Values.guard.existingSecret) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "igloo.guard.fullname" . }}-secrets
+  labels:
+    {{- include "igloo.guard.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{- range $name, $value := .Values.guard.secrets }}
+  {{ $name }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "igloo.guard.fullname" . }}
+  labels:
+    {{- include "igloo.guard.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.guard.replicas }}
+  selector:
+    matchLabels:
+      {{- include "igloo.guard.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "igloo.guard.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "igloo.imagePullSecrets" . | nindent 6 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: guard
+          image: {{ include "igloo.image" (dict "root" . "image" (printf "%s:%v" .Values.guard.image.repository .Values.guard.image.tag)) | quote }}
+          imagePullPolicy: {{ .Values.guard.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: IGLOO_SERVER_URL
+              value: "http://{{ include "igloo.server.fullname" . }}:{{ .Values.server.service.port }}"
+            - name: IGLOO_GUARD_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.guard.fullname" . }}
+                  key: key
+            - name: IGLOO_GUARD_ADDR
+              value: ":{{ .Values.guard.port }}"
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.guard.port }}
+          readinessProbe:
+            httpGet: {path: /healthz, port: proxy}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: proxy}
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          volumeMounts:
+            - name: secrets
+              mountPath: /etc/igloo-guard/secrets
+              readOnly: true
+          resources:
+            {{- toYaml .Values.guard.resources | nindent 12 }}
+      volumes:
+        - name: secrets
+          {{- if or .Values.guard.existingSecret .Values.guard.secrets }}
+          secret:
+            secretName: {{ default (printf "%s-secrets" (include "igloo.guard.fullname" .)) .Values.guard.existingSecret }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.guard.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.guard.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.guard.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "igloo.guard.fullname" . }}
+  labels:
+    {{- include "igloo.guard.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "igloo.guard.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: proxy
+      port: {{ .Values.guard.port }}
+      targetPort: proxy
+---
+# Only workspaces may use the gateway; nothing else in the cluster needs to reach it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "igloo.guard.fullname" . }}
+  labels:
+    {{- include "igloo.guard.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "igloo.guard.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.provisioner.workspace.namespace | default "workspaces" | quote }}
+      ports:
+        - port: {{ .Values.guard.port }}
+          protocol: TCP
+{{- end }}

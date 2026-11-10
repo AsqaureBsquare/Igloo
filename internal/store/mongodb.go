@@ -106,6 +106,8 @@ type mUserDoc struct {
 	TailscaleAuthKey string    `bson:"tailscale_auth_key"`
 	IsAdmin          bool      `bson:"is_admin"`
 	CreatedAt        time.Time `bson:"created_at"`
+
+	PasswordChangedAt time.Time `bson:"password_changed_at,omitempty"`
 }
 
 type mWorkspaceDoc struct {
@@ -212,7 +214,7 @@ func (s *MongoStore) CreateUser(ctx context.Context, u *models.User) error {
 	doc := mUserDoc{
 		ID: u.ID, Email: u.Email, Name: u.Name,
 		PasswordHash: u.PasswordHash, TailscaleAuthKey: u.TailscaleAuthKey,
-		IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
+		IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt, PasswordChangedAt: u.PasswordChangedAt,
 	}
 	_, err := s.users.InsertOne(ctx, doc)
 	if mongo.IsDuplicateKeyError(err) {
@@ -249,7 +251,7 @@ func (s *MongoStore) UpdateUser(ctx context.Context, u *models.User) error {
 	doc := mUserDoc{
 		ID: u.ID, Email: u.Email, Name: u.Name,
 		PasswordHash: u.PasswordHash, TailscaleAuthKey: u.TailscaleAuthKey,
-		IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt,
+		IsAdmin: u.IsAdmin, CreatedAt: u.CreatedAt, PasswordChangedAt: u.PasswordChangedAt,
 	}
 	_, err := s.users.ReplaceOne(ctx, bson.M{"_id": u.ID}, doc)
 	return err
@@ -281,7 +283,7 @@ func mUserFromDoc(d mUserDoc) *models.User {
 	return &models.User{
 		ID: d.ID, Email: d.Email, Name: d.Name,
 		PasswordHash: d.PasswordHash, TailscaleAuthKey: d.TailscaleAuthKey,
-		IsAdmin: d.IsAdmin, CreatedAt: d.CreatedAt,
+		IsAdmin: d.IsAdmin, CreatedAt: d.CreatedAt, PasswordChangedAt: d.PasswordChangedAt,
 	}
 }
 

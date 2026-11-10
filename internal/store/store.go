@@ -93,3 +93,16 @@ type Store interface {
 	RemoveTeamMember(ctx context.Context, teamID, userID string) error
 	SyncTeamMembers(ctx context.Context, teamID string, userIDs []string) error
 }
+
+// GuardEventStore is implemented by stores that can keep the egress gateway's audit
+// trail. It is separate from Store so a backend without it still works (activity is then
+// reported as unsupported).
+type GuardEventStore interface {
+	AppendGuardEvents(ctx context.Context, evs []models.GuardEvent) error
+	// ListGuardEvents returns a workspace's events, newest first, at most limit.
+	ListGuardEvents(ctx context.Context, workspaceID string, limit int) ([]models.GuardEvent, error)
+}
+
+// MaxGuardEventsPerWorkspace bounds how much audit history one workspace keeps in the
+// in-memory store; the SQL store keeps history until it is pruned.
+const MaxGuardEventsPerWorkspace = 5000

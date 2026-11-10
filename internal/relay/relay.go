@@ -24,12 +24,43 @@ type Message struct {
 type conn struct {
 	ws   *websocket.Conn
 	send chan []byte
+	done chan struct{} // closed once when the connection is torn down
+	once sync.Once
+}
+
+func newConn(ws *websocket.Conn) *conn {
+	return &conn{ws: ws, send: make(chan []byte, 256), done: make(chan struct{})}
+}
+
+// close signals shutdown. The send channel is deliberately never closed: other
+// goroutines may be mid-send, and sending on a closed channel panics.
+func (c *conn) close() { c.once.Do(func() { close(c.done) }) }
+
+// enqueue queues msg for the writer without blocking. It reports false when the
+// connection is gone or its buffer is full (the message is dropped).
+func (c *conn) enqueue(msg []byte) bool {
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+	select {
+	case c.send <- msg:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *conn) writePump() {
 	defer c.ws.Close()
-	for msg := range c.send {
-		if err := c.ws.WriteMessage(websocket.TextMessage, msg); err != nil {
+	for {
+		select {
+		case msg := <-c.send:
+			if err := c.ws.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-c.done:
 			return
 		}
 	}
@@ -78,8 +109,9 @@ func (r *Relay) Subscribe(workspaceID string) (<-chan []byte, func()) {
 
 	return ch, func() {
 		r.mu.Lock()
-		if r.subs[workspaceID] != nil {
-			delete(r.subs[workspaceID], id)
+		delete(r.subs[workspaceID], id)
+		if len(r.subs[workspaceID]) == 0 {
+			delete(r.subs, workspaceID)
 		}
 		r.mu.Unlock()
 	}
@@ -93,12 +125,23 @@ func (r *Relay) SendToAgent(workspaceID string, msg []byte) {
 // RegisterAgent registers an agent WebSocket for a workspace and starts
 // forwarding its messages to all connected browsers.
 func (r *Relay) RegisterAgent(workspaceID, connID string, ws *websocket.Conn) {
-	c := &conn{ws: ws, send: make(chan []byte, 256)}
+	r.RegisterAgentNotify(workspaceID, connID, ws, nil)
+}
+
+// RegisterAgentNotify is RegisterAgent that calls onRegistered once the agent can
+// receive messages (AgentConnected is true). Anything that announces the workspace
+// as usable, such as its status, belongs there: announcing earlier lets clients act
+// in the gap and get "agent not connected".
+func (r *Relay) RegisterAgentNotify(workspaceID, connID string, ws *websocket.Conn, onRegistered func()) {
+	c := newConn(ws)
 	go c.writePump()
 
 	r.mu.Lock()
 	r.agents[workspaceID] = c
 	r.mu.Unlock()
+	if onRegistered != nil {
+		onRegistered()
+	}
 
 	log.Printf("[relay] agent connected  workspace=%s", workspaceID)
 
@@ -116,13 +159,13 @@ func (r *Relay) RegisterAgent(workspaceID, connID string, ws *websocket.Conn) {
 		delete(r.agents, workspaceID)
 	}
 	r.mu.Unlock()
-	close(c.send)
+	c.close()
 	log.Printf("[relay] agent disconnected workspace=%s", workspaceID)
 }
 
 // RegisterBrowser registers a browser WebSocket for a workspace.
 func (r *Relay) RegisterBrowser(workspaceID, connID string, ws *websocket.Conn) {
-	c := &conn{ws: ws, send: make(chan []byte, 256)}
+	c := newConn(ws)
 	go c.writePump()
 
 	r.mu.Lock()
@@ -145,8 +188,11 @@ func (r *Relay) RegisterBrowser(workspaceID, connID string, ws *websocket.Conn) 
 
 	r.mu.Lock()
 	delete(r.browsers[workspaceID], connID)
+	if len(r.browsers[workspaceID]) == 0 {
+		delete(r.browsers, workspaceID)
+	}
 	r.mu.Unlock()
-	close(c.send)
+	c.close()
 	log.Printf("[relay] browser disconnected workspace=%s conn=%s", workspaceID, connID)
 }
 
@@ -158,12 +204,30 @@ func (r *Relay) AgentConnected(workspaceID string) bool {
 	return ok
 }
 
+// browserMessage reports whether a message from the agent may be shown to the browsers connected
+// to the workspace: only the terminal's. Everything else an agent sends answers a request made by
+// the server (command results, file contents, forwarded web responses, tunnel data) and belongs to
+// that request alone, so it goes to the server-side subscribers and handlers, never to a browser.
+func browserMessage(msg []byte) bool {
+	var m struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(msg, &m) != nil {
+		return false
+	}
+	switch m.Type {
+	case "pty_output", "pty_ready", "pty_exit", "pty_error":
+		return true
+	}
+	return false
+}
+
 func (r *Relay) broadcast(workspaceID string, msg []byte) {
+	toBrowsers := browserMessage(msg)
 	r.mu.RLock()
-	for _, c := range r.browsers[workspaceID] {
-		select {
-		case c.send <- msg:
-		default:
+	if toBrowsers {
+		for _, c := range r.browsers[workspaceID] {
+			c.enqueue(msg)
 		}
 	}
 	for _, ch := range r.subs[workspaceID] {
@@ -193,8 +257,5 @@ func (r *Relay) forwardToAgent(workspaceID string, msg []byte) {
 		return
 	}
 
-	select {
-	case agent.send <- msg:
-	default:
-	}
+	agent.enqueue(msg)
 }

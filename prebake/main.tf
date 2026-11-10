@@ -14,7 +14,7 @@ terraform {
     }
     igloo = {
       source  = "AsqaureBsquare/igloo"
-      version = "~> 0.1"
+      version = "~> 0.1.6" # keep equal to the templates; prebake_test.go enforces it
     }
   }
   backend "local" {}

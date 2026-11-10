@@ -6,7 +6,11 @@ on:
     tags: ["v*"]
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build-push:
+    needs: test
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -23,6 +27,8 @@ jobs:
             dockerfile: Dockerfile.provisioner
           - name: igloo-workspace
             dockerfile: Dockerfile.workspace
+          - name: igloo-guard
+            dockerfile: Dockerfile.guard
 
     steps:
       - uses: actions/checkout@v4

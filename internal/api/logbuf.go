@@ -56,6 +56,15 @@ func (b *LogBuffer) Subscribe(workspaceID string) ([]string, <-chan string, func
 	}
 }
 
+// Snapshot returns a copy of the buffered lines for a workspace.
+func (b *LogBuffer) Snapshot(workspaceID string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, len(b.lines[workspaceID]))
+	copy(out, b.lines[workspaceID])
+	return out
+}
+
 func (b *LogBuffer) Clear(workspaceID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

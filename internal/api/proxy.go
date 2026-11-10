@@ -232,6 +232,7 @@ func (h *Handler) proxyWS(w http.ResponseWriter, r *http.Request, wsID string) {
 		return
 	}
 	defer browserConn.Close()
+	browserConn.SetReadLimit(maxProxiedWSFrame)
 
 	ch, cancel := h.Relay.Subscribe(wsID)
 	defer cancel()

@@ -106,9 +106,12 @@ func (c *Coordinator) entry(wsID string) *wsEntry {
 	return e
 }
 
+// nextIP hands out 100.64.x.y addresses, skipping .0 and .255 in every /24 (the
+// old arithmetic produced x.0 when the low byte wrapped).
 func (c *Coordinator) nextIP() netip.Addr {
-	n := c.counter.Add(1)
-	return netip.AddrFrom4([4]byte{100, 64, byte(n >> 8), byte(n) + 1})
+	idx := c.counter.Add(1) - 1
+	hi, lo := idx/253, idx%253+2 // lo in 2..254
+	return netip.AddrFrom4([4]byte{100, 64, byte(hi), byte(lo)})
 }
 
 // ServeAgent is called when a workspace agent connects via WebSocket.

@@ -489,11 +489,10 @@ func runProxy(args []string) {
 	wsBase = strings.Replace(wsBase, "http://", "ws://", 1)
 	u, _ := url.Parse(wsBase + "/api/workspaces/" + workspaceID + "/forward")
 	q := u.Query()
-	q.Set("token", fwToken)
 	q.Set("port", port)
 	u.RawQuery = q.Encode()
 
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Authorization": {"Bearer " + fwToken}})
 	if err != nil {
 		log.Fatalf("dial failed: %v", err)
 	}

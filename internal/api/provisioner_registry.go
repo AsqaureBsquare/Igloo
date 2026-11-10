@@ -159,7 +159,7 @@ func buildClaimResponse(ctx context.Context, h *Handler, job *models.ProvisionJo
 		WorkspaceID:   ws.ID,
 		WorkspaceName: ws.Name,
 		AgentToken:    ws.AgentToken,
-		Vars:          ws.Vars,
+		Vars:          h.claimVars(ws),
 		Meta:          ws.Meta,
 		Files:         files,
 		ServerURL:     os.Getenv("IGLOO_SERVER_URL"),

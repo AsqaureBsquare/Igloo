@@ -48,15 +48,11 @@ func Run(ctx context.Context, in Input, action Action) (map[string]string, error
 		}
 	}
 
-	// Generate backend.tf (S3 state per workspace)
-	backend := fmt.Sprintf(`terraform {
-  backend "s3" {
-    bucket = %q
-    key    = "workspaces/%s/terraform.tfstate"
-    region = %q
-  }
-}
-`, in.StateBucket, in.WorkspaceID, in.StateRegion)
+	// Generate backend.tf (state per workspace).
+	backend, err := backendConfig(in)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.WriteFile(filepath.Join(dir, "backend.tf"), []byte(backend), 0644); err != nil {
 		return nil, fmt.Errorf("write backend.tf: %w", err)
 	}
@@ -151,6 +147,35 @@ func Run(ctx context.Context, in Input, action Action) (map[string]string, error
 	default:
 		return nil, fmt.Errorf("unknown action: %s", action)
 	}
+}
+
+// backendConfig renders the terraform backend block. StateBucket "local" keeps
+// state on disk under IGLOO_TF_STATE_DIR (mount a persistent volume there);
+// anything else is treated as an S3 bucket.
+func backendConfig(in Input) (string, error) {
+	if in.StateBucket == "local" {
+		stateDir := os.Getenv("IGLOO_TF_STATE_DIR")
+		if stateDir == "" {
+			stateDir = "/var/lib/igloo/state"
+		}
+		if err := os.MkdirAll(stateDir, 0700); err != nil {
+			return "", fmt.Errorf("mkdir state dir: %w", err)
+		}
+		return fmt.Sprintf(`terraform {
+  backend "local" {
+    path = %q
+  }
+}
+`, filepath.Join(stateDir, in.WorkspaceID+".tfstate")), nil
+	}
+	return fmt.Sprintf(`terraform {
+  backend "s3" {
+    bucket = %q
+    key    = "workspaces/%s/terraform.tfstate"
+    region = %q
+  }
+}
+`, in.StateBucket, in.WorkspaceID, in.StateRegion), nil
 }
 
 // readOutputs runs terraform output -json and returns the values.

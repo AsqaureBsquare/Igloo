@@ -1,0 +1,88 @@
+{{- if include "igloo.postgres.bundled" . }}
+{{- $pw := include "igloo.postgres.password" . }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "igloo.postgres.fullname" . }}
+  labels:
+    {{- include "igloo.postgres.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  password: {{ $pw | quote }}
+  url: {{ printf "postgres://igloo:%s@%s:5432/igloo?sslmode=disable" $pw (include "igloo.postgres.fullname" .) | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "igloo.postgres.fullname" . }}
+  labels:
+    {{- include "igloo.postgres.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+  selector:
+    {{- include "igloo.postgres.selectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "igloo.postgres.fullname" . }}
+  labels:
+    {{- include "igloo.postgres.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "igloo.postgres.fullname" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "igloo.postgres.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "igloo.postgres.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "igloo.imagePullSecrets" . | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ include "igloo.image" (dict "root" . "image" .Values.postgresql.image) | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: igloo
+            - name: POSTGRES_DB
+              value: igloo
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.postgres.fullname" . }}
+                  key: password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "igloo", "-d", "igloo"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.postgresql.storageClass }}
+        storageClassName: {{ .Values.postgresql.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.storageSize }}
+{{- end }}

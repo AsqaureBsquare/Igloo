@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type ProvisionerKey struct {
 	ID         string            `json:"id"`
@@ -83,6 +86,10 @@ type User struct {
 	IsAdmin          bool      `json:"is_admin,omitempty"`
 	LoginType        string    `json:"login_type,omitempty"` // "password" | "oidc" | "none"
 	CreatedAt        time.Time `json:"created_at"`
+
+	// PasswordChangedAt is when the password was last changed or reset. A session token issued
+	// before then is no longer accepted. Zero means never changed.
+	PasswordChangedAt time.Time `json:"-"`
 }
 
 // APIToken is a long-lived DB-backed token for service accounts and CI/CD.
@@ -172,6 +179,9 @@ type Template struct {
 type PlatformConfig struct {
 	TailscaleAPIKey  string `json:"tailscale_api_key,omitempty"`
 	TailscaleTailnet string `json:"tailscale_tailnet,omitempty"`
+
+	// GuardBaseline is the organisation-wide network baseline (guard.Baseline as JSON).
+	GuardBaseline json.RawMessage `json:"guard_baseline,omitempty"`
 }
 
 // TemplateVar defines a user-configurable input shown in the UI at workspace creation time.
@@ -186,4 +196,19 @@ type TemplateVar struct {
 	Min         string   `json:"min,omitempty"`     // for type=number
 	Max         string   `json:"max,omitempty"`     // for type=number
 	Mutable     bool     `json:"mutable,omitempty"` // whether changeable after creation
+}
+
+// GuardEvent is one network decision made by the egress gateway for a workspace.
+type GuardEvent struct {
+	Time        time.Time `json:"time"`
+	WorkspaceID string    `json:"workspace_id"`
+	Kind        string    `json:"kind"`     // connect | http | route
+	Decision    string    `json:"decision"` // allow | deny
+	Host        string    `json:"host"`
+	Method      string    `json:"method,omitempty"`
+	Path        string    `json:"path,omitempty"`
+	Rule        string    `json:"rule,omitempty"`
+	Status      int       `json:"status,omitempty"`
+	Bytes       int64     `json:"bytes,omitempty"`
+	Detail      string    `json:"detail,omitempty"`
 }

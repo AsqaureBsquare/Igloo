@@ -12,6 +12,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +46,18 @@ type Message struct {
 	Headers map[string]string `json:"headers,omitempty"`
 	Body    string            `json:"body,omitempty"`
 	Status  int               `json:"status,omitempty"`
+
+	// exec / file operations (see exec.go)
+	Cmd       []string `json:"cmd,omitempty"`
+	Cwd       string   `json:"cwd,omitempty"`
+	TimeoutS  int      `json:"timeout_s,omitempty"`
+	Mode      uint32   `json:"mode,omitempty"`
+	Exit      int      `json:"exit,omitempty"`
+	Stdout    string   `json:"stdout,omitempty"`
+	Stderr    string   `json:"stderr,omitempty"`
+	TimedOut  bool     `json:"timed_out,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
+	Err       string   `json:"err,omitempty"`
 }
 
 const codeServerPort = "13131"
@@ -82,18 +95,29 @@ func main() {
 	// WireGuard path: igloo ssh connects via tailnet tunnel to WG IP:22.
 	go startTailnet(serverURL, token, workspaceID, sshCfg)
 
-	// Start code-server if installed
-	go startCodeServer(workspaceID)
+	// Start code-server if installed, and connect only once it is listening: the
+	// server marks the workspace running when the agent connects, and "running"
+	// should mean VS Code can be opened. Don't wait forever if it never comes up.
+	csReady := make(chan struct{})
+	var csOnce sync.Once
+	markReady := func() { csOnce.Do(func() { close(csReady) }) }
+	go startCodeServer(context.Background(), workspaceID, markReady)
+	select {
+	case <-csReady:
+	case <-time.After(45 * time.Second):
+		log.Println("[igloo-agent] code-server not ready after 45s — connecting anyway")
+	}
 
-	backoff := time.Second
+	delay := time.Second
 	for {
+		started := time.Now()
 		if err := run(serverURL, token); err != nil {
-			log.Printf("[igloo-agent] disconnected: %v — reconnecting in %v", err, backoff)
+			log.Printf("[igloo-agent] disconnected: %v", err)
 		}
-		time.Sleep(backoff)
-		if backoff < 2*time.Minute {
-			backoff *= 2
-		}
+		var wait time.Duration
+		wait, delay = restartDelay(delay, time.Since(started), time.Second, 2*time.Minute)
+		log.Printf("[igloo-agent] reconnecting in %v", wait)
+		time.Sleep(wait)
 	}
 }
 
@@ -105,15 +129,16 @@ func startTailnet(serverURL, token, workspaceID string, cfg *ssh.ServerConfig) {
 	if serverURL == "" || token == "" || workspaceID == "" {
 		return
 	}
-	backoff := 3 * time.Second
+	delay := 3 * time.Second
 	for {
+		started := time.Now()
 		if err := runTailnet(serverURL, token, workspaceID, cfg); err != nil {
-			log.Printf("[tailnet] disconnected: %v — reconnecting in %v", err, backoff)
+			log.Printf("[tailnet] disconnected: %v", err)
 		}
-		time.Sleep(backoff)
-		if backoff < 2*time.Minute {
-			backoff *= 2
-		}
+		var wait time.Duration
+		wait, delay = restartDelay(delay, time.Since(started), 3*time.Second, 2*time.Minute)
+		log.Printf("[tailnet] reconnecting in %v", wait)
+		time.Sleep(wait)
 	}
 }
 
@@ -140,37 +165,30 @@ func runTailnet(serverURL, token, workspaceID string, cfg *ssh.ServerConfig) err
 	}
 }
 
-func startCodeServer(workspaceID string) {
+func startCodeServer(ctx context.Context, workspaceID string, onReady func()) {
 	path, err := exec.LookPath("code-server")
 	if err != nil {
 		log.Println("[igloo-agent] code-server not found — VS Code unavailable")
+		onReady() // nothing to wait for
 		return
 	}
 
-	workspaceDir := os.Getenv("WORKSPACE_DIR")
-	if workspaceDir == "" {
-		workspaceDir = "/home/user"
+	workspaceDir := workspaceBase()
+
+	log.Printf("[igloo-agent] starting code-server on :%s (workspace=%s, dir=%s)", codeServerPort, workspaceID, workspaceDir)
+	mk := func() *exec.Cmd {
+		cmd := exec.CommandContext(ctx, path,
+			"--bind-addr", "127.0.0.1:"+codeServerPort,
+			"--auth", "none",
+			"--disable-telemetry",
+			"--user-data-dir", workspaceDir+"/.vscode-data",
+			workspaceDir,
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd
 	}
-
-	// Wait a moment for the workspace to settle
-	time.Sleep(2 * time.Second)
-
-	cmd := exec.Command(path,
-		"--bind-addr", "127.0.0.1:"+codeServerPort,
-		"--auth", "none",
-		"--disable-telemetry",
-		"--user-data-dir", workspaceDir+"/.vscode-data",
-		workspaceDir,
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("[igloo-agent] failed to start code-server: %v", err)
-		return
-	}
-	log.Printf("[igloo-agent] code-server started on :%s (workspace=%s, dir=%s)", codeServerPort, workspaceID, workspaceDir)
-	cmd.Wait()
+	superviseCmd(ctx, "code-server", mk, "127.0.0.1:"+codeServerPort, onReady, time.Second, time.Minute)
 }
 
 func run(serverURL, token string) error {
@@ -181,11 +199,8 @@ func run(serverURL, token string) error {
 	if err != nil {
 		return err
 	}
-	q := u.Query()
-	q.Set("token", token)
-	u.RawQuery = q.Encode()
-
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	// The agent token is long-lived: send it in a header, not the URL.
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), http.Header{"Authorization": {"Bearer " + token}})
 	if err != nil {
 		return err
 	}
@@ -234,6 +249,12 @@ func run(serverURL, token string) error {
 		}
 
 		switch msg.Type {
+
+		// ─── programmatic access (sandbox API) ───────────────────────────────
+		case "exec":
+			go handleExecMsg(func(m Message) { sendMsg(conn, m) }, msg, workspaceBase())
+		case "fs_read", "fs_write":
+			go handleFsMsg(func(m Message) { sendMsg(conn, m) }, msg, workspaceBase())
 
 		// ─── PTY ─────────────────────────────────────────────────────────────
 		case "pty_spawn":
@@ -371,7 +392,14 @@ func handleHTTPReq(conn *websocket.Conn, msg Message) {
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, tooBig := readCapped(resp.Body, maxProxyBody)
+	if tooBig {
+		log.Printf("[igloo-agent] http_req %s %s: response over %d MiB, not proxied", msg.Method, msg.Path, maxProxyBody>>20)
+		sendMsg(conn, Message{Type: "http_res", ID: msg.ID, Status: http.StatusBadGateway,
+			Headers: map[string]string{"Content-Type": "text/plain; charset=utf-8"},
+			Body:    base64.StdEncoding.EncodeToString([]byte("response too large to proxy through Igloo\n"))})
+		return
+	}
 	headers := make(map[string]string, len(resp.Header))
 	for k, vals := range resp.Header {
 		headers[k] = vals[0]

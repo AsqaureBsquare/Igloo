@@ -14,10 +14,19 @@ spec:
       labels:
         {{- include "igloo.server.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.global.imagePullSecrets }}
+      {{- include "igloo.imagePullSecrets" . | nindent 6 }}
+      {{- end }}
       serviceAccountName: {{ include "igloo.server.serviceAccountName" . }}
+      {{- if include "igloo.postgres.bundled" . }}
+      initContainers:
+        - name: wait-for-postgres
+          image: {{ include "igloo.image" (dict "root" . "image" .Values.postgresql.image) | quote }}
+          command: ["sh", "-c", "until pg_isready -h {{ include "igloo.postgres.fullname" . }} -U igloo -d igloo; do sleep 2; done"]
+      {{- end }}
       containers:
         - name: server
-          image: "{{ .Values.server.image.repository }}:{{ .Values.server.image.tag }}"
+          image: {{ include "igloo.image" (dict "root" . "image" (printf "%s:%v" .Values.server.image.repository .Values.server.image.tag)) | quote }}
           imagePullPolicy: {{ .Values.server.image.pullPolicy }}
           command: ["./igloo"]
           args:
@@ -53,12 +62,45 @@ spec:
             - name: IGLOO_TF_STATE_REGION
               value: {{ .Values.provisioner.aws.region | quote }}
             - name: IGLOO_WORKSPACE_IMAGE
-              value: {{ .Values.provisioner.workspace.image | quote }}
+              value: {{ if .Values.provisioner.workspace.image }}{{ include "igloo.image" (dict "root" . "image" .Values.provisioner.workspace.image) | quote }}{{ else }}""{{ end }}
+            - name: IGLOO_WORKSPACE_NAMESPACE
+              value: {{ .Values.provisioner.workspace.namespace | default "workspaces" | quote }}
+            {{- if .Values.server.devUI.hostPath }}
+            - name: IGLOO_UI_DIR
+              value: /ui
+            {{- end }}
+            {{- if .Values.server.sandboxImage }}
+            - name: IGLOO_SANDBOX_IMAGE
+              value: {{ include "igloo.image" (dict "root" . "image" .Values.server.sandboxImage) | quote }}
+            {{- end }}
+            {{- if .Values.guard.enabled }}
+            - name: IGLOO_GUARD_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.guard.fullname" . }}
+                  key: key
+            - name: IGLOO_GUARD_PROXY_URL
+              value: {{ include "igloo.guard.proxyURL" . | quote }}
+            {{- end }}
+            {{- if .Values.server.allowSignup }}
+            - name: IGLOO_ALLOW_SIGNUP
+              value: "true"
+            {{- end }}
+            {{- if .Values.server.corsOrigins }}
+            - name: IGLOO_CORS_ORIGINS
+              value: {{ .Values.server.corsOrigins | quote }}
+            {{- end }}
             - name: IGLOO_SEED_TEMPLATES
               value: "true"
             - name: IGLOO_DYNAMO_TABLE
               value: {{ .Values.server.dynamo.table | quote }}
-            {{- if .Values.server.database.postgresURL }}
+            {{- if include "igloo.postgres.bundled" . }}
+            - name: IGLOO_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "igloo.postgres.fullname" . }}
+                  key: url
+            {{- else if .Values.server.database.postgresURL }}
             - name: IGLOO_DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -110,8 +152,21 @@ spec:
               port: http
             initialDelaySeconds: 3
             periodSeconds: 10
+          {{- if .Values.server.devUI.hostPath }}
+          volumeMounts:
+            - name: dev-ui
+              mountPath: /ui
+              readOnly: true
+          {{- end }}
           resources:
             {{- toYaml .Values.server.resources | nindent 12 }}
+      {{- if .Values.server.devUI.hostPath }}
+      volumes:
+        - name: dev-ui
+          hostPath:
+            path: {{ .Values.server.devUI.hostPath | quote }}
+            type: Directory
+      {{- end }}
       {{- with .Values.server.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

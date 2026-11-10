@@ -1,0 +1,79 @@
+{{- if .Values.guard.enabled }}
+# `helm test <release>` checks that this cluster really enforces NetworkPolicy. The guard's promise
+# (a workspace can only reach the gateway) rests on it: on a CNI that ignores policies the objects
+# exist but nothing is blocked. A pod with no policy must reach the gateway; an identical pod under a
+# policy that allows only DNS must not. They run in the workspaces namespace, the only place the
+# gateway accepts connections from, which is also where real workspaces live.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "igloo.guard.fullname" . }}-enforcement-probe
+  namespace: {{ .Values.provisioner.workspace.namespace | default "workspaces" }}
+  labels:
+    {{- include "igloo.guard.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  podSelector:
+    matchLabels:
+      igloo.dev/netpol-probe: "blocked"
+  policyTypes: ["Egress"]
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+{{- range $role := list "control" "blocked" }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "igloo.guard.fullname" $ }}-probe-{{ $role }}
+  namespace: {{ $.Values.provisioner.workspace.namespace | default "workspaces" }}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: {{ $.Release.Name | quote }}
+    igloo.dev/netpol-probe: {{ $role | quote }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": {{ if eq $role "control" }}"0"{{ else }}"1"{{ end }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- if $.Values.global.imagePullSecrets }}
+  {{- include "igloo.imagePullSecrets" $ | nindent 2 }}
+  {{- end }}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: probe
+      image: {{ include "igloo.image" (dict "root" $ "image" (printf "%s:%v" $.Values.guard.image.repository $.Values.guard.image.tag)) | quote }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      command:
+        - sh
+        - -c
+        - |
+          URL=http://{{ include "igloo.guard.fullname" $ }}.{{ $.Release.Namespace }}.svc.cluster.local:3128/healthz
+          {{- if eq $role "control" }}
+          wget -q -T 10 -O /dev/null "$URL" || { echo "FAIL: cannot reach the gateway even without a policy; check that it is running"; exit 1; }
+          echo "ok: an unrestricted pod reaches the gateway"
+          {{- else }}
+          nslookup {{ include "igloo.guard.fullname" $ }}.{{ $.Release.Namespace }}.svc.cluster.local >/dev/null 2>&1 || { echo "FAIL: DNS does not work for the restricted pod"; exit 1; }
+          if wget -q -T 6 -O /dev/null "$URL"; then
+            echo "FAIL: NetworkPolicy is NOT enforced on this cluster. Guarded workspaces can bypass the gateway."
+            echo "Use a CNI that enforces it (Cilium, Calico, ...) or enable the policy add-on of your provider."
+            exit 1
+          fi
+          echo "ok: NetworkPolicy is enforced"
+          {{- end }}
+---
+{{- end }}
+{{- end }}

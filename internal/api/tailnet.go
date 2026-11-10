@@ -17,7 +17,7 @@ var tnUpgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { retu
 func (h *Handler) TailnetWS(w http.ResponseWriter, r *http.Request) {
 	wsID := chi.URLParam(r, "id")
 	role := r.URL.Query().Get("role")
-	token := r.URL.Query().Get("token")
+	token := connToken(r)
 
 	claims, err := h.Auth.ParseConn(token)
 	if err != nil || claims.WorkspaceID != wsID {
@@ -45,6 +45,7 @@ func (h *Handler) TailnetWS(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	conn.SetReadLimit(maxClientFrame)
 
 	if role == "agent" {
 		h.Coordinator.ServeAgent(wsID, conn)

@@ -20,7 +20,7 @@ var provisionerUpgrader = websocket.Upgrader{
 
 // wsMsg is the envelope for all provisioner ↔ server WebSocket messages.
 type wsMsg struct {
-	Type        string            `json:"type"`                  // acquire | ping | log | done | fail | job
+	Type        string            `json:"type"`                  // acquire | ping | log | done | fail | defer | job
 	JobID       string            `json:"job_id,omitempty"`
 	WorkspaceID string            `json:"workspace_id,omitempty"` // log | done | fail
 	Line        string            `json:"line,omitempty"`         // log
@@ -29,10 +29,13 @@ type wsMsg struct {
 	Job         *claimResponse    `json:"job,omitempty"`          // server→daemon: type=job
 }
 
+// provisionerToken is the provisioner key of a WebSocket request (see bearerOrQuery).
+func provisionerToken(r *http.Request) string { return bearerOrQuery(r, "token") }
+
 // ProvisionerWS handles GET /api/provisioner/ws.
 // Each daemon connects once; concurrency is expressed by sending multiple "acquire" messages.
 func (h *Handler) ProvisionerWS(w http.ResponseWriter, r *http.Request) {
-	token := r.URL.Query().Get("token")
+	token := provisionerToken(r)
 	if token == "" {
 		h.err(w, http.StatusUnauthorized, "token required")
 		return
@@ -56,6 +59,7 @@ func (h *Handler) ProvisionerWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	conn.SetReadLimit(maxDaemonFrame)
 
 	log.Printf("[provisioner-ws] provisioner %s connected", provisionerID)
 
@@ -156,6 +160,9 @@ func (h *Handler) ProvisionerWS(w http.ResponseWriter, r *http.Request) {
 				h.LogBuf.Append(msg.WorkspaceID, "✗ Failed: "+msg.Error)
 			}
 			h.handleJobFail(r.Context(), msg.JobID, msg.Error)
+
+		case "defer":
+			h.handleJobDefer(r.Context(), msg.JobID)
 		}
 	}
 
@@ -250,10 +257,11 @@ func (h *Handler) ClaimJob(w http.ResponseWriter, r *http.Request) {
 		JobID:         job.ID,
 		Action:        string(job.Action),
 		RetryCount:    job.RetryCount,
+		Provider:      ws.Provider,
 		WorkspaceID:   ws.ID,
 		WorkspaceName: ws.Name,
 		AgentToken:    ws.AgentToken,
-		Vars:          ws.Vars,
+		Vars:          h.claimVars(ws),
 		Meta:          ws.Meta,
 		Files:         files,
 		ServerURL:     os.Getenv("IGLOO_SERVER_URL"),
@@ -318,6 +326,22 @@ func (h *Handler) handleJobDone(ctx context.Context, jobID string, outputs map[s
 		}
 	}
 	log.Printf("[provisioner-api] job %s done (workspace=%s action=%s)", jobID, job.WorkspaceID, job.Action)
+}
+
+// handleJobDefer puts a job back in the queue without counting a retry. A daemon
+// defers when it is already busy with another job for the same workspace: that
+// is a collision to wait out, not a failure (counting it would burn every retry
+// in a second and leave the workspace in "error").
+func (h *Handler) handleJobDefer(ctx context.Context, jobID string) {
+	job, err := h.Store.GetJob(ctx, jobID)
+	if err != nil || job.Status != models.JobRunning {
+		return
+	}
+	job.Status = models.JobPending
+	job.ProvisionerID = ""
+	job.UpdatedAt = time.Now()
+	_ = h.Store.UpdateJob(ctx, job)
+	log.Printf("[provisioner-api] job %s deferred: workspace %s is busy", jobID, job.WorkspaceID)
 }
 
 func (h *Handler) handleJobFail(ctx context.Context, jobID, errMsg string) {

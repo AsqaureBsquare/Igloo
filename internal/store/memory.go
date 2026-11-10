@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ type MemoryStore struct {
 	orgMembers     map[string]*models.OrgMember      // orgID+userID → member
 	teams          map[string]*models.Team            // id → team
 	teamMembers    map[string]*models.TeamMember      // teamID+userID → member
+	guardEvents    map[string][]models.GuardEvent     // workspaceID → events, oldest first
 }
 
 func NewMemory() *MemoryStore {
@@ -49,6 +51,7 @@ func NewMemory() *MemoryStore {
 		orgMembers:  make(map[string]*models.OrgMember),
 		teams:       make(map[string]*models.Team),
 		teamMembers: make(map[string]*models.TeamMember),
+		guardEvents: make(map[string][]models.GuardEvent),
 	}
 }
 
@@ -223,6 +226,7 @@ func (s *MemoryStore) ListWorkspaces(_ context.Context, userID, orgID string) ([
 		cp := *w
 		out = append(out, &cp)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) }) // newest first, like Postgres
 	return out, nil
 }
 
@@ -279,6 +283,7 @@ func (s *MemoryStore) ListTemplates(_ context.Context, orgID string) ([]*models.
 			out = append(out, &cp)
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name }) // same order as Postgres
 	return out, nil
 }
 
@@ -756,4 +761,33 @@ func (s *MemoryStore) SyncTeamMembers(_ context.Context, teamID string, userIDs 
 		}
 	}
 	return nil
+}
+
+// ─── Guard events ─────────────────────────────────────────────────────────────
+
+func (s *MemoryStore) AppendGuardEvents(_ context.Context, evs []models.GuardEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range evs {
+		list := append(s.guardEvents[e.WorkspaceID], e)
+		if over := len(list) - MaxGuardEventsPerWorkspace; over > 0 {
+			list = list[over:]
+		}
+		s.guardEvents[e.WorkspaceID] = list
+	}
+	return nil
+}
+
+func (s *MemoryStore) ListGuardEvents(_ context.Context, workspaceID string, limit int) ([]models.GuardEvent, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	list := s.guardEvents[workspaceID]
+	if limit <= 0 || limit > len(list) {
+		limit = len(list)
+	}
+	out := make([]models.GuardEvent, 0, limit)
+	for i := len(list) - 1; i >= len(list)-limit; i-- { // newest first
+		out = append(out, list[i])
+	}
+	return out, nil
 }

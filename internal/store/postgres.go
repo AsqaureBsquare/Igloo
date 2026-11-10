@@ -33,8 +33,20 @@ func NewPostgresStore(ctx context.Context, url string) (*PostgresStore, error) {
 }
 
 // migrate applies sqlSchema idempotently (every statement is IF NOT EXISTS, so new columns are ALTERs at the end).
+// Server replicas starting together would deadlock applying it concurrently (SQLSTATE
+// 40P01), so an advisory lock makes the second one wait for the first instead.
 func (s *PostgresStore) migrate(ctx context.Context) error {
-	_, err := s.db.Exec(ctx, sqlSchema)
+	conn, err := s.db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	const migrationLock = 0x69676c6f // "iglo" — any constant all replicas agree on
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLock); err != nil {
+		return err
+	}
+	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, migrationLock)
+	_, err = conn.Exec(ctx, sqlSchema)
 	return err
 }
 

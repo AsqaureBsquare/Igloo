@@ -444,3 +444,33 @@ func TestSandboxImageDefaultsToTheConfiguredOneAndTheCallersChoiceWins(t *testin
 		t.Errorf("a requested image must win, got %q", v)
 	}
 }
+
+// The operator's RuntimeClass (e.g. kata, for microVM isolation) reaches every sandbox that
+// does not name its own, and never tramples one the caller chose.
+func TestSandboxesRunUnderTheOperatorsRuntimeClassUnlessTheCallerNamesOne(t *testing.T) {
+	g := newSandboxRig(t)
+	g.h.SandboxRuntimeClass = "kata"
+
+	rec := g.do("POST", "/api/sandboxes", g.alice, map[string]any{"unguarded": true})
+	var out struct{ ID string }
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	ws, _ := g.h.Store.GetWorkspace(context.Background(), out.ID)
+	if ws.Vars["runtime_class"] != "kata" {
+		t.Errorf("runtime_class = %q, want the operator's kata", ws.Vars["runtime_class"])
+	}
+
+	rec = g.do("POST", "/api/sandboxes", g.alice, map[string]any{"unguarded": true, "vars": map[string]string{"runtime_class": "kata-qemu"}})
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	ws, _ = g.h.Store.GetWorkspace(context.Background(), out.ID)
+	if ws.Vars["runtime_class"] != "kata-qemu" {
+		t.Errorf("runtime_class = %q: the caller's choice must win", ws.Vars["runtime_class"])
+	}
+
+	g.h.SandboxRuntimeClass = ""
+	rec = g.do("POST", "/api/sandboxes", g.alice, map[string]any{"unguarded": true})
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	ws, _ = g.h.Store.GetWorkspace(context.Background(), out.ID)
+	if _, set := ws.Vars["runtime_class"]; set {
+		t.Errorf("runtime_class = %q with no operator default", ws.Vars["runtime_class"])
+	}
+}

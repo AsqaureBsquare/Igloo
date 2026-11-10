@@ -183,6 +183,9 @@ func (h *Handler) CreateSandbox(w http.ResponseWriter, r *http.Request) {
 	if image != "" {
 		vars["workspace_image"] = image
 	}
+	if vars["runtime_class"] == "" && h.SandboxRuntimeClass != "" {
+		vars["runtime_class"] = h.SandboxRuntimeClass
+	}
 	expires := time.Now().Add(ttl).UTC()
 	ws, code, msg := h.createWorkspace(r, createInput{
 		Name: name, TemplateID: tpl, Vars: vars, Guard: pol,

@@ -272,3 +272,13 @@ func TestWorkspaceNamespaceFollowsTheValue(t *testing.T) {
 		}
 	}
 }
+
+func TestSandboxRuntimeClassReachesTheServerOnlyWhenSet(t *testing.T) {
+	if strings.Contains(render(t), "IGLOO_SANDBOX_RUNTIME_CLASS") {
+		t.Error("IGLOO_SANDBOX_RUNTIME_CLASS set with no value configured")
+	}
+	out := render(t, "server.sandboxRuntimeClass=kata")
+	if !regexp.MustCompile(`IGLOO_SANDBOX_RUNTIME_CLASS\s*\n\s*value:\s*"kata"`).MatchString(out) {
+		t.Error("server.sandboxRuntimeClass=kata did not reach the server environment")
+	}
+}

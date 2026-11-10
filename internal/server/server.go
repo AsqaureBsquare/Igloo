@@ -70,6 +70,7 @@ func New(st store.Store, a *auth.Auth) *Server {
 	h.GuardKey = os.Getenv("IGLOO_GUARD_KEY")
 	h.GuardProxyURL = os.Getenv("IGLOO_GUARD_PROXY_URL")
 	h.SandboxImage = os.Getenv("IGLOO_SANDBOX_IMAGE")
+	h.SandboxRuntimeClass = os.Getenv("IGLOO_SANDBOX_RUNTIME_CLASS")
 	if raw := os.Getenv("IGLOO_OIDC_ALLOWED_GROUPS"); raw != "" {
 		h.AllowedGroups = strings.Fields(strings.ReplaceAll(raw, ",", " "))
 	}
@@ -280,6 +281,8 @@ func (s *Server) SeedBuiltinTemplates(ctx context.Context) {
 				{Name: "cpu", DisplayName: "CPU", Description: "CPU request for the workspace container.", Default: "500m", Type: "select", Options: []string{"500m", "1000m", "2000m"}, Mutable: true},
 				{Name: "memory", DisplayName: "Memory", Description: "Memory request for the workspace container.", Default: "512Mi", Type: "select", Options: []string{"512Mi", "1Gi", "2Gi"}, Mutable: true},
 				{Name: "disk", DisplayName: "Disk", Description: "Persistent volume size for the workspace home directory.", Default: "10Gi", Type: "select", Options: []string{"10Gi", "20Gi", "50Gi"}, Mutable: false},
+				{Name: "runtime_class", DisplayName: "Runtime", Description: "Kubernetes RuntimeClass for the pod. Name a microVM runtime such as \"kata\" (nodes must have it installed) for a workspace with its own kernel; empty uses the cluster default.", Default: "", Type: "string", Mutable: false},
+				{Name: "gpu", DisplayName: "GPUs", Description: "NVIDIA GPUs to reserve (nodes need the device plugin). 0 for none.", Default: "0", Type: "string", Mutable: false},
 			},
 			Files: loadTemplateFiles("kubernetes"),
 		},

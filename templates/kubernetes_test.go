@@ -26,8 +26,8 @@ func TestKubernetesTemplateKeepsItsWorkspacesConfined(t *testing.T) {
 	if regexp.MustCompile(`# DNS|port\s*=\s*"53"`).MatchString(tf) {
 		t.Error("a guarded workspace's network policy must not allow DNS: a name lookup is a way to carry data out")
 	}
-	for _, want := range []string{`dns_policy = local.guarded ? "None"`, `dynamic "host_aliases"`, `nameservers = ["127.0.0.1"]`} {
-		if !strings.Contains(tf, want) {
+	for _, want := range []string{`dns_policy\s+= local.guarded \? "None"`, `dynamic "host_aliases"`, `nameservers = \["127.0.0.1"\]`} {
+		if !regexp.MustCompile(want).MatchString(tf) {
 			t.Errorf("template lost %q, which keeps a guarded workspace off DNS", want)
 		}
 	}
@@ -49,5 +49,21 @@ func TestKubernetesTemplateDoesNotAssumeTheDefaultInstall(t *testing.T) {
 		if strings.Contains(code, `"igloo-server`) || strings.Contains(code, `"igloo-guard`) || strings.Contains(code, `= "workspaces"`) {
 			t.Errorf("template hardcodes a name that depends on the install: %s", code)
 		}
+	}
+}
+
+// MicroVM isolation and GPUs hang on two lines of the template: the pod's runtime_class_name
+// (driven by the runtime_class parameter, absent when empty) and the GPU resource limit.
+func TestKubernetesTemplateWiresRuntimeClassAndGPUs(t *testing.T) {
+	b, err := os.ReadFile("kubernetes/main.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tf := string(b)
+	if !regexp.MustCompile(`runtime_class_name\s*=\s*igloo_parameter\.runtime_class\.value != "" \? igloo_parameter\.runtime_class\.value : null`).MatchString(tf) {
+		t.Error("the pod's runtime_class_name must follow the runtime_class parameter and stay unset when it is empty")
+	}
+	if !regexp.MustCompile(`limits\s*=\s*igloo_parameter\.gpu\.value != "0" \? \{ "nvidia\.com/gpu" = igloo_parameter\.gpu\.value \} : \{\}`).MatchString(tf) {
+		t.Error("the container must reserve nvidia.com/gpu from the gpu parameter and add no limits when it is 0")
 	}
 }

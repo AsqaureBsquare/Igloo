@@ -72,7 +72,10 @@ jobs:
   deploy:
     name: Rollout to EKS
     needs: build-push
-    if: github.ref == 'refs/heads/main'
+    # Opt in with the repository variable DEPLOY_TO_EKS=true (Settings > Secrets and variables > Actions >
+    # Variables), once the cluster and the AWS_ROLE_ARN secret exist. Without it, publishing images
+    # does not try to reach AWS.
+    if: github.ref == 'refs/heads/main' && vars.DEPLOY_TO_EKS == 'true'
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

@@ -1,6 +1,9 @@
 package auth
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -14,6 +17,15 @@ type Auth struct {
 
 func New(secret string) *Auth {
 	return &Auth{secret: []byte(secret)}
+}
+
+// InternalKey derives the shared key server replicas use to authenticate to each
+// other's internal relay listener. Every replica derives the same key from the
+// JWT secret they already share, so no new secret has to be configured.
+func (a *Auth) InternalKey() string {
+	m := hmac.New(sha256.New, a.secret)
+	m.Write([]byte("igloo/internal-relay/v1"))
+	return hex.EncodeToString(m.Sum(nil))
 }
 
 // ─── Password ─────────────────────────────────────────────────────────────────

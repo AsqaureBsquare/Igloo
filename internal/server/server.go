@@ -239,6 +239,45 @@ func New(st store.Store, a *auth.Auth) *Server {
 	return &Server{handler: h, router: r}
 }
 
+// StartHA joins this replica to the relay cluster when IGLOO_INTERNAL_ADDR is set — the
+// address (host:port) where peer replicas can reach this pod's internal listener, e.g.
+// "$(POD_IP):8081" from the downward API. Unset, the server runs exactly as before. The
+// internal listener is served on its own port and must never be exposed through the
+// ingress; peers authenticate with a key derived from the shared JWT secret.
+func (s *Server) StartHA(ctx context.Context) {
+	addr := os.Getenv("IGLOO_INTERNAL_ADDR")
+	if addr == "" {
+		return
+	}
+	owners, ok := s.handler.Store.(relay.OwnerStore)
+	if !ok {
+		log.Fatalf("[ha] the %T store cannot record agent ownership; more than one replica needs the Postgres store", s.handler.Store)
+	}
+	replicaID := os.Getenv("IGLOO_REPLICA_ID")
+	if replicaID == "" {
+		replicaID, _ = os.Hostname()
+	}
+	s.handler.Relay.JoinCluster(ctx, relay.Cluster{
+		ReplicaID: replicaID,
+		PodAddr:   addr,
+		Key:       s.handler.Auth.InternalKey(),
+		Owners:    owners,
+	})
+
+	port := os.Getenv("IGLOO_INTERNAL_PORT")
+	if port == "" {
+		port = "8081"
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/internal/relay/", s.handler.Relay.InternalHandler())
+	go func() {
+		log.Printf("[ha] replica %s serving peers on :%s (advertised %s)", replicaID, port, addr)
+		if err := http.ListenAndServe(":"+port, mux); err != nil {
+			log.Fatalf("[ha] internal listener: %v", err)
+		}
+	}()
+}
+
 // BootstrapProvisionerKey creates a provisioner key from IGLOO_PROVISIONER_BOOTSTRAP_KEY
 // if set. Safe to call on every startup — silently skips if the key already exists.
 func (s *Server) BootstrapProvisionerKey(ctx context.Context) {

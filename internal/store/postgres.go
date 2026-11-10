@@ -941,7 +941,50 @@ ALTER TABLE templates ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE templates ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 0;
 ALTER TABLE templates ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS workspaces_org_id_idx ON workspaces(org_id);
+CREATE TABLE IF NOT EXISTS agent_owners (
+    workspace_id TEXT PRIMARY KEY,
+    replica_id   TEXT NOT NULL,
+    pod_addr     TEXT NOT NULL,
+    lease_until  TIMESTAMPTZ NOT NULL
+);
 `
+
+// ─── Agent ownership (multi-replica relay) ───────────────────────────────────
+
+func (s *PostgresStore) UpsertAgentOwner(ctx context.Context, o *models.AgentOwner) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO agent_owners (workspace_id, replica_id, pod_addr, lease_until)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (workspace_id) DO UPDATE
+		SET replica_id=$2, pod_addr=$3, lease_until=$4`,
+		o.WorkspaceID, o.ReplicaID, o.PodAddr, o.LeaseUntil)
+	return err
+}
+
+func (s *PostgresStore) GetAgentOwner(ctx context.Context, workspaceID string) (*models.AgentOwner, error) {
+	row := s.db.QueryRow(ctx, `SELECT workspace_id, replica_id, pod_addr, lease_until
+		FROM agent_owners WHERE workspace_id=$1 AND lease_until > now()`, workspaceID)
+	var o models.AgentOwner
+	if err := row.Scan(&o.WorkspaceID, &o.ReplicaID, &o.PodAddr, &o.LeaseUntil); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &o, nil
+}
+
+func (s *PostgresStore) RenewAgentOwner(ctx context.Context, workspaceID, replicaID string, leaseUntil time.Time) error {
+	_, err := s.db.Exec(ctx, `UPDATE agent_owners SET lease_until=$3
+		WHERE workspace_id=$1 AND replica_id=$2`, workspaceID, replicaID, leaseUntil)
+	return err
+}
+
+func (s *PostgresStore) DeleteAgentOwner(ctx context.Context, workspaceID, replicaID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM agent_owners
+		WHERE workspace_id=$1 AND replica_id=$2`, workspaceID, replicaID)
+	return err
+}
 
 // ─── Guard events ─────────────────────────────────────────────────────────────
 

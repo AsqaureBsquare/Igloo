@@ -660,6 +660,7 @@ func runServer(args []string) {
 	srv.SeedBuiltinTemplates(ctx)
 	srv.BootstrapProvisionerKey(ctx)
 	srv.StartWorker(ctx)
+	srv.StartHA(ctx)
 
 	addr := ":" + port
 	log.Printf("[igloo] server starting on http://localhost%s", addr)

@@ -26,7 +26,7 @@ func stores(t *testing.T) map[string]func(t *testing.T) Store {
 			}
 			// Isolate each test: start from empty tables.
 			if _, err := s.db.Exec(context.Background(),
-				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events RESTART IDENTITY CASCADE`); err != nil {
+				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners RESTART IDENTITY CASCADE`); err != nil {
 				t.Fatalf("truncate: %v", err)
 			}
 			t.Cleanup(s.db.Close)
@@ -323,6 +323,63 @@ func TestGuardEvents(t *testing.T) {
 		}
 		if none, _ := g.ListGuardEvents(ctx, "nobody", 10); len(none) != 0 {
 			t.Errorf("unknown workspace has %d events", len(none))
+		}
+	})
+}
+
+// The agent-owner lease is what lets a second server replica find the agent. The rules:
+// the most recent connection wins, a stale replica can neither renew nor delete a row
+// it lost, and an unrenewed lease lapses on its own.
+func TestAgentOwnerLease(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		os, ok := s.(AgentOwnerStore)
+		if !ok {
+			t.Skipf("%T does not support agent ownership", s)
+		}
+		ctx := context.Background()
+
+		if o, err := os.GetAgentOwner(ctx, "w1"); err != nil || o != nil {
+			t.Fatalf("empty store: owner=%v err=%v, want nil, nil", o, err)
+		}
+
+		live := time.Now().Add(5 * time.Second)
+		if err := os.UpsertAgentOwner(ctx, &models.AgentOwner{WorkspaceID: "w1", ReplicaID: "a", PodAddr: "10.0.0.1:8081", LeaseUntil: live}); err != nil {
+			t.Fatal(err)
+		}
+		o, err := os.GetAgentOwner(ctx, "w1")
+		if err != nil || o == nil || o.ReplicaID != "a" || o.PodAddr != "10.0.0.1:8081" {
+			t.Fatalf("after claim: owner=%+v err=%v", o, err)
+		}
+
+		// The agent reconnected to b: b's claim overwrites a's unexpired lease.
+		if err := os.UpsertAgentOwner(ctx, &models.AgentOwner{WorkspaceID: "w1", ReplicaID: "b", PodAddr: "10.0.0.2:8081", LeaseUntil: live}); err != nil {
+			t.Fatal(err)
+		}
+		// a, with its stale half-dead connection, can neither renew nor delete the row back.
+		if err := os.RenewAgentOwner(ctx, "w1", "a", time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.DeleteAgentOwner(ctx, "w1", "a"); err != nil {
+			t.Fatal(err)
+		}
+		if o, _ := os.GetAgentOwner(ctx, "w1"); o == nil || o.ReplicaID != "b" {
+			t.Fatalf("the stale replica took the workspace back: owner=%+v", o)
+		}
+
+		// The owner itself may delete its row (clean disconnect).
+		if err := os.DeleteAgentOwner(ctx, "w1", "b"); err != nil {
+			t.Fatal(err)
+		}
+		if o, _ := os.GetAgentOwner(ctx, "w1"); o != nil {
+			t.Fatalf("row survived the owner's delete: %+v", o)
+		}
+
+		// An expired lease is the same as no owner.
+		if err := os.UpsertAgentOwner(ctx, &models.AgentOwner{WorkspaceID: "w1", ReplicaID: "a", PodAddr: "x", LeaseUntil: time.Now().Add(-time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		if o, _ := os.GetAgentOwner(ctx, "w1"); o != nil {
+			t.Fatalf("a lapsed lease still answered: %+v", o)
 		}
 	})
 }

@@ -5,6 +5,7 @@
 package relay
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -72,6 +73,12 @@ type Relay struct {
 	agents   map[string]*conn                 // workspaceID → agent conn
 	browsers map[string]map[string]*conn      // workspaceID → connID → browser conn
 	subs     map[string]map[string]chan []byte // workspaceID → subID → channel (server-side listeners)
+	remotes  map[string]*conn                  // workspaceID → link to the replica that owns the agent
+	peers    map[string]map[string]*conn       // workspaceID → streams served to peer replicas
+	cluster  *Cluster                          // nil when running as a single replica
+
+	dialMu sync.Mutex
+	dials  map[string]*sync.Mutex // workspaceID → remote-dial-in-progress lock
 
 	handlerMu     sync.RWMutex
 	agentHandlers []func(workspaceID string, msg []byte)
@@ -82,6 +89,8 @@ func New() *Relay {
 		agents:   make(map[string]*conn),
 		browsers: make(map[string]map[string]*conn),
 		subs:     make(map[string]map[string]chan []byte),
+		remotes:  make(map[string]*conn),
+		peers:    make(map[string]map[string]*conn),
 	}
 }
 
@@ -92,12 +101,16 @@ func (r *Relay) OnAgentMessage(fn func(workspaceID string, msg []byte)) {
 	r.handlerMu.Unlock()
 }
 
+func randomID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return fmt.Sprintf("%x", b)
+}
+
 // Subscribe returns a channel that receives all messages the agent sends for
 // the given workspace. Call cancel when done.
 func (r *Relay) Subscribe(workspaceID string) (<-chan []byte, func()) {
-	b := make([]byte, 8)
-	rand.Read(b)
-	id := fmt.Sprintf("%x", b)
+	id := randomID()
 	ch := make(chan []byte, 64)
 
 	r.mu.Lock()
@@ -139,6 +152,9 @@ func (r *Relay) RegisterAgentNotify(workspaceID, connID string, ws *websocket.Co
 	r.mu.Lock()
 	r.agents[workspaceID] = c
 	r.mu.Unlock()
+	// Record ownership before announcing the agent, so a request landing on another
+	// replica right after the announcement can already find its way here.
+	r.claimOwnership(workspaceID)
 	if onRegistered != nil {
 		onRegistered()
 	}
@@ -155,10 +171,17 @@ func (r *Relay) RegisterAgentNotify(workspaceID, connID string, ws *websocket.Co
 	}
 
 	r.mu.Lock()
-	if r.agents[workspaceID] == c {
+	last := r.agents[workspaceID] == c
+	if last {
 		delete(r.agents, workspaceID)
 	}
 	r.mu.Unlock()
+	if last {
+		// A reconnect registers the new connection (and re-claims ownership, possibly
+		// on another replica) before the old one closes — release only when this was
+		// still the live connection.
+		r.releaseOwnership(workspaceID)
+	}
 	c.close()
 	log.Printf("[relay] agent disconnected workspace=%s", workspaceID)
 }
@@ -196,12 +219,20 @@ func (r *Relay) RegisterBrowser(workspaceID, connID string, ws *websocket.Conn) 
 	log.Printf("[relay] browser disconnected workspace=%s conn=%s", workspaceID, connID)
 }
 
-// AgentConnected reports whether a live agent is registered for the workspace.
+// AgentConnected reports whether the workspace's agent is reachable: connected to this
+// replica, or (in a cluster) to a peer holding a live ownership lease.
 func (r *Relay) AgentConnected(workspaceID string) bool {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	_, ok := r.agents[workspaceID]
-	return ok
+	c := r.cluster
+	r.mu.RUnlock()
+	if ok || c == nil {
+		return ok
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	o, err := c.Owners.GetAgentOwner(ctx, workspaceID)
+	return err == nil && o != nil && o.ReplicaID != c.ReplicaID
 }
 
 // browserMessage reports whether a message from the agent may be shown to the browsers connected
@@ -250,6 +281,10 @@ func (r *Relay) forwardToAgent(workspaceID string, msg []byte) {
 	agent := r.agents[workspaceID]
 	r.mu.RUnlock()
 
+	if agent == nil {
+		// Not here — in a cluster the owning replica's relay takes it from here.
+		agent = r.remoteFor(workspaceID)
+	}
 	if agent == nil {
 		// No agent — send an error back: encode into pty_error message
 		errMsg, _ := json.Marshal(Message{Type: "pty_error", Data: "agent not connected"})

@@ -94,6 +94,24 @@ type Store interface {
 	SyncTeamMembers(ctx context.Context, teamID string, userIDs []string) error
 }
 
+// AgentOwnerStore is implemented by stores that can record which server replica holds
+// a workspace's agent connection. It is what lets more than one server replica run:
+// a replica that does not hold the agent looks up the owner and forwards to it.
+// A store without it supports a single replica only.
+type AgentOwnerStore interface {
+	// UpsertAgentOwner records the owner unconditionally — the agent just connected
+	// there, and the most recent connection wins.
+	UpsertAgentOwner(ctx context.Context, o *models.AgentOwner) error
+	// GetAgentOwner returns the owner holding a live lease, or nil, nil when there is none.
+	GetAgentOwner(ctx context.Context, workspaceID string) (*models.AgentOwner, error)
+	// RenewAgentOwner extends the lease only while replicaID still owns the row, so a
+	// replica with a stale connection cannot take a workspace back from the one the
+	// agent reconnected to.
+	RenewAgentOwner(ctx context.Context, workspaceID, replicaID string, leaseUntil time.Time) error
+	// DeleteAgentOwner removes the row only while replicaID still owns it.
+	DeleteAgentOwner(ctx context.Context, workspaceID, replicaID string) error
+}
+
 // GuardEventStore is implemented by stores that can keep the egress gateway's audit
 // trail. It is separate from Store so a backend without it still works (activity is then
 // reported as unsupported).
@@ -106,3 +124,9 @@ type GuardEventStore interface {
 // MaxGuardEventsPerWorkspace bounds how much audit history one workspace keeps in the
 // in-memory store; the SQL store keeps history until it is pruned.
 const MaxGuardEventsPerWorkspace = 5000
+
+// The backends that can run more than one server replica.
+var (
+	_ AgentOwnerStore = (*MemoryStore)(nil) // one process only — for tests and --local
+	_ AgentOwnerStore = (*PostgresStore)(nil)
+)

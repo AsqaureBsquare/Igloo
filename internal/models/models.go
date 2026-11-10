@@ -212,3 +212,13 @@ type GuardEvent struct {
 	Bytes       int64     `json:"bytes,omitempty"`
 	Detail      string    `json:"detail,omitempty"`
 }
+
+// AgentOwner records which server replica currently holds a workspace's agent
+// connection, so another replica can forward to it. The row is a lease: a
+// crashed replica's rows expire, and the agent's reconnection overwrites them.
+type AgentOwner struct {
+	WorkspaceID string    `json:"workspace_id"`
+	ReplicaID   string    `json:"replica_id"`
+	PodAddr     string    `json:"pod_addr"` // host:port of the replica's internal listener
+	LeaseUntil  time.Time `json:"lease_until"`
+}

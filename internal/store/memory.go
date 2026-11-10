@@ -33,6 +33,7 @@ type MemoryStore struct {
 	teams          map[string]*models.Team            // id → team
 	teamMembers    map[string]*models.TeamMember      // teamID+userID → member
 	guardEvents    map[string][]models.GuardEvent     // workspaceID → events, oldest first
+	agentOwners    map[string]*models.AgentOwner      // workspaceID → owning replica lease
 }
 
 func NewMemory() *MemoryStore {
@@ -52,7 +53,47 @@ func NewMemory() *MemoryStore {
 		teams:       make(map[string]*models.Team),
 		teamMembers: make(map[string]*models.TeamMember),
 		guardEvents: make(map[string][]models.GuardEvent),
+		agentOwners: make(map[string]*models.AgentOwner),
 	}
+}
+
+// ─── Agent ownership (multi-replica relay) ───────────────────────────────────
+
+func (s *MemoryStore) UpsertAgentOwner(_ context.Context, o *models.AgentOwner) error {
+	cp := *o
+	s.mu.Lock()
+	s.agentOwners[o.WorkspaceID] = &cp
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *MemoryStore) GetAgentOwner(_ context.Context, workspaceID string) (*models.AgentOwner, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	o := s.agentOwners[workspaceID]
+	if o == nil || !o.LeaseUntil.After(time.Now()) {
+		return nil, nil
+	}
+	cp := *o
+	return &cp, nil
+}
+
+func (s *MemoryStore) RenewAgentOwner(_ context.Context, workspaceID, replicaID string, leaseUntil time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if o := s.agentOwners[workspaceID]; o != nil && o.ReplicaID == replicaID {
+		o.LeaseUntil = leaseUntil
+	}
+	return nil
+}
+
+func (s *MemoryStore) DeleteAgentOwner(_ context.Context, workspaceID, replicaID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if o := s.agentOwners[workspaceID]; o != nil && o.ReplicaID == replicaID {
+		delete(s.agentOwners, workspaceID)
+	}
+	return nil
 }
 
 // ─── APITokens ────────────────────────────────────────────────────────────────

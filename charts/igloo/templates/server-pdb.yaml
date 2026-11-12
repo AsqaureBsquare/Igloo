@@ -1,0 +1,15 @@
+{{- if gt (int .Values.server.replicas) 1 }}
+# With several replicas the point is that one is always up: node drains and upgrades
+# may take the others, but never the last one.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "igloo.server.fullname" . }}
+  labels:
+    {{- include "igloo.server.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "igloo.server.selectorLabels" . | nindent 6 }}
+{{- end }}

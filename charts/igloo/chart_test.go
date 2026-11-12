@@ -282,3 +282,58 @@ func TestSandboxRuntimeClassReachesTheServerOnlyWhenSet(t *testing.T) {
 		t.Error("server.sandboxRuntimeClass=kata did not reach the server environment")
 	}
 }
+
+// One replica must render exactly as before HA existed: no internal listener, no
+// budget, no policy — the HA machinery stays dormant.
+func TestOneReplicaHasNoHAMachinery(t *testing.T) {
+	out := render(t)
+	for _, leak := range []string{"IGLOO_INTERNAL_ADDR", "PodDisruptionBudget", "containerPort: 8081"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("single-replica render contains %q", leak)
+		}
+	}
+}
+
+func TestTwoReplicasWireTheInternalListener(t *testing.T) {
+	out := render(t, "server.replicas=2")
+	for _, want := range []string{
+		"replicas: 2",
+		`value: "$(POD_IP):8081"`, // each pod advertises its own address
+		"fieldPath: status.podIP",
+		"fieldPath: metadata.name", // pod name as replica id
+		"PodDisruptionBudget",
+		"minAvailable: 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("two-replica render is missing %q", want)
+		}
+	}
+	// The internal port must be reachable from server pods only; the HTTP port stays open.
+	np := regexp.MustCompile(`(?s)kind: NetworkPolicy.*?-internal.*?ingress:(.*?)---`).FindStringSubmatch(out)
+	if np == nil {
+		t.Fatal("no internal NetworkPolicy rendered")
+	}
+	if !strings.Contains(np[1], "port: 8081") || !strings.Contains(np[1], "podSelector") {
+		t.Errorf("internal NetworkPolicy does not confine 8081 to server pods:\n%s", np[1])
+	}
+	if !strings.Contains(np[1], "port: 8080") {
+		t.Errorf("internal NetworkPolicy would cut off the HTTP port:\n%s", np[1])
+	}
+}
+
+// Two replicas on a store that cannot share state must refuse to render, not deploy
+// something that half works.
+func TestTwoReplicasRefuseWithoutPostgres(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not installed")
+	}
+	args := []string{"template", "igloo", ".", "--set", "server.jwtSecret=x", "--set", "provisioner.key=y",
+		"--set", "server.replicas=2", "--set", "server.localMode=true"}
+	out, err := exec.Command("helm", args...).CombinedOutput()
+	if err == nil {
+		t.Fatal("helm template succeeded for 2 replicas on the in-memory store")
+	}
+	if !strings.Contains(string(out), "needs PostgreSQL") {
+		t.Errorf("refusal does not say why: %s", out)
+	}
+}

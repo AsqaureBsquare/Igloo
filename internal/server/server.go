@@ -41,10 +41,14 @@ func New(st store.Store, a *auth.Auth) *Server {
 		NetMap:      api.NewNetMapStore(),
 	}
 	h.Relay.OnAgentMessage(h.NetMap.HandleAgentMessage)
-	// Build logs follow the store when it can keep them, so the SSE stream works on a
-	// replica other than the one the provisioner reports to.
+	// Build logs and network snapshots follow the store when it can keep them, so the
+	// SSE stream and the Network tab work on a replica other than the one the
+	// provisioner or agent reports to.
 	if ls, ok := st.(api.LogStore); ok {
 		h.LogBuf.Back(ls)
+	}
+	if ss, ok := st.(api.SnapshotStore); ok {
+		h.NetMap.Back(ss)
 	}
 
 	// Wire up OIDC if configured via environment variables.

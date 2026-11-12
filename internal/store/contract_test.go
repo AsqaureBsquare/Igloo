@@ -27,7 +27,7 @@ func stores(t *testing.T) map[string]func(t *testing.T) Store {
 			}
 			// Isolate each test: start from empty tables.
 			if _, err := s.db.Exec(context.Background(),
-				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners, device_codes, provision_logs RESTART IDENTITY CASCADE`); err != nil {
+				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners, device_codes, provision_logs, net_snapshots RESTART IDENTITY CASCADE`); err != nil {
 				t.Fatalf("truncate: %v", err)
 			}
 			t.Cleanup(s.db.Close)
@@ -550,6 +550,40 @@ func TestProvisionLogs(t *testing.T) {
 		}
 		if other, _ := pls.ListProvisionLogs(ctx, "w2", 0); len(other) != 1 {
 			t.Fatalf("w2's lines were deleted with w1's: %+v", other)
+		}
+	})
+}
+
+// The latest network snapshot persists so any replica can serve the Network tab.
+func TestNetSnapshots(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		nss, ok := s.(NetSnapshotStore)
+		if !ok {
+			t.Skipf("%T does not keep network snapshots", s)
+		}
+		ctx := context.Background()
+
+		if _, _, err := nss.GetNetSnapshot(ctx, "w1"); err != ErrNotFound {
+			t.Fatalf("missing snapshot: err=%v, want ErrNotFound", err)
+		}
+		at := time.Now().Truncate(time.Millisecond)
+		if err := nss.SaveNetSnapshot(ctx, "w1", []byte(`[{"state":"ESTABLISHED"}]`), at); err != nil {
+			t.Fatal(err)
+		}
+		// Latest wins.
+		at2 := at.Add(time.Second)
+		if err := nss.SaveNetSnapshot(ctx, "w1", []byte(`[]`), at2); err != nil {
+			t.Fatal(err)
+		}
+		raw, got, err := nss.GetNetSnapshot(ctx, "w1")
+		if err != nil || string(raw) != `[]` || !got.Equal(at2) {
+			t.Fatalf("raw=%s at=%v err=%v, want the second save", raw, got, err)
+		}
+		if err := nss.DeleteNetSnapshot(ctx, "w1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := nss.GetNetSnapshot(ctx, "w1"); err != ErrNotFound {
+			t.Fatalf("snapshot survived delete: err=%v", err)
 		}
 	})
 }

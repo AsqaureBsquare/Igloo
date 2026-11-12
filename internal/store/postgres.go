@@ -973,6 +973,11 @@ CREATE TABLE IF NOT EXISTS provision_logs (
     line         TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS provision_logs_ws_id_idx ON provision_logs(workspace_id, id);
+CREATE TABLE IF NOT EXISTS net_snapshots (
+    workspace_id TEXT PRIMARY KEY,
+    connections  JSONB NOT NULL,
+    updated_at   TIMESTAMPTZ NOT NULL
+);
 `
 
 // ─── Device-login codes ──────────────────────────────────────────────────────
@@ -1081,6 +1086,33 @@ func (s *PostgresStore) ListProvisionLogs(ctx context.Context, workspaceID strin
 
 func (s *PostgresStore) DeleteProvisionLogs(ctx context.Context, workspaceID string) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM provision_logs WHERE workspace_id=$1`, workspaceID)
+	return err
+}
+
+// ─── Network snapshots ───────────────────────────────────────────────────────
+
+func (s *PostgresStore) SaveNetSnapshot(ctx context.Context, workspaceID string, connections []byte, updatedAt time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO net_snapshots (workspace_id, connections, updated_at)
+		VALUES ($1,$2,$3)
+		ON CONFLICT (workspace_id) DO UPDATE SET connections=$2, updated_at=$3`,
+		workspaceID, connections, updatedAt)
+	return err
+}
+
+func (s *PostgresStore) GetNetSnapshot(ctx context.Context, workspaceID string) ([]byte, time.Time, error) {
+	var connections []byte
+	var updatedAt time.Time
+	err := s.db.QueryRow(ctx, `SELECT connections, updated_at FROM net_snapshots
+		WHERE workspace_id=$1`, workspaceID).Scan(&connections, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, time.Time{}, ErrNotFound
+	}
+	return connections, updatedAt, err
+}
+
+func (s *PostgresStore) DeleteNetSnapshot(ctx context.Context, workspaceID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM net_snapshots WHERE workspace_id=$1`, workspaceID)
 	return err
 }
 

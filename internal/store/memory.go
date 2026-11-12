@@ -38,6 +38,12 @@ type MemoryStore struct {
 	regLock        sync.Mutex                         // serialises first-user registration
 	provLogs       map[string][]models.ProvisionLogLine // workspaceID → lines, oldest first
 	provLogSeq     int64                              // global, so seqs order across workspaces too
+	netSnapshots   map[string]*netSnapshot            // workspaceID → latest network snapshot
+}
+
+type netSnapshot struct {
+	connections []byte
+	updatedAt   time.Time
 }
 
 type deviceCode struct {
@@ -65,7 +71,35 @@ func NewMemory() *MemoryStore {
 		agentOwners: make(map[string]*models.AgentOwner),
 		deviceCodes: make(map[string]*deviceCode),
 		provLogs:    make(map[string][]models.ProvisionLogLine),
+		netSnapshots: make(map[string]*netSnapshot),
 	}
+}
+
+// ─── Network snapshots ───────────────────────────────────────────────────────
+
+func (s *MemoryStore) SaveNetSnapshot(_ context.Context, workspaceID string, connections []byte, updatedAt time.Time) error {
+	cp := append([]byte(nil), connections...)
+	s.mu.Lock()
+	s.netSnapshots[workspaceID] = &netSnapshot{connections: cp, updatedAt: updatedAt}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *MemoryStore) GetNetSnapshot(_ context.Context, workspaceID string) ([]byte, time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap := s.netSnapshots[workspaceID]
+	if snap == nil {
+		return nil, time.Time{}, ErrNotFound
+	}
+	return append([]byte(nil), snap.connections...), snap.updatedAt, nil
+}
+
+func (s *MemoryStore) DeleteNetSnapshot(_ context.Context, workspaceID string) error {
+	s.mu.Lock()
+	delete(s.netSnapshots, workspaceID)
+	s.mu.Unlock()
+	return nil
 }
 
 // ─── Provision logs ──────────────────────────────────────────────────────────

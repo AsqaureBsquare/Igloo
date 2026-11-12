@@ -146,6 +146,16 @@ type ProvisionLogStore interface {
 	DeleteProvisionLogs(ctx context.Context, workspaceID string) error
 }
 
+// NetSnapshotStore is implemented by stores that can keep each workspace's latest
+// network snapshot, so the Network tab works on a replica other than the one the agent
+// reports to. Connections is the agent's connection list as JSON.
+type NetSnapshotStore interface {
+	SaveNetSnapshot(ctx context.Context, workspaceID string, connections []byte, updatedAt time.Time) error
+	// GetNetSnapshot returns ErrNotFound when the workspace has no snapshot.
+	GetNetSnapshot(ctx context.Context, workspaceID string) ([]byte, time.Time, error)
+	DeleteNetSnapshot(ctx context.Context, workspaceID string) error
+}
+
 // GuardEventStore is implemented by stores that can keep the egress gateway's audit
 // trail. It is separate from Store so a backend without it still works (activity is then
 // reported as unsupported).
@@ -169,4 +179,6 @@ var (
 	_ RegistrationLocker = (*PostgresStore)(nil)
 	_ ProvisionLogStore  = (*MemoryStore)(nil)
 	_ ProvisionLogStore  = (*PostgresStore)(nil)
+	_ NetSnapshotStore   = (*MemoryStore)(nil)
+	_ NetSnapshotStore   = (*PostgresStore)(nil)
 )

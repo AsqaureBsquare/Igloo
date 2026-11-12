@@ -666,9 +666,22 @@ func runServer(args []string) {
 	log.Printf("[igloo] server starting on http://localhost%s", addr)
 	log.Printf("[igloo] open your browser → http://localhost%s", addr)
 
-	if err := http.ListenAndServe(addr, srv); err != nil {
+	// SIGTERM (what Kubernetes sends on every rolling restart) must actually stop the
+	// process: cancelling ctx alone left the listener serving forever. Shutdown stops
+	// accepting, then the timeout cuts off what remains — open WebSockets never finish
+	// on their own, so an unbounded drain would hang until SIGKILL.
+	httpSrv := &http.Server{Addr: addr, Handler: srv}
+	go func() {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(shutdownCtx)
+		_ = httpSrv.Close()
+	}()
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	log.Println("[igloo] server stopped")
 }
 
 // ─── provisioner-keys subcommand ─────────────────────────────────────────────

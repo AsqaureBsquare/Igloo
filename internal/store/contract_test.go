@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func stores(t *testing.T) map[string]func(t *testing.T) Store {
 			}
 			// Isolate each test: start from empty tables.
 			if _, err := s.db.Exec(context.Background(),
-				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners RESTART IDENTITY CASCADE`); err != nil {
+				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners, device_codes RESTART IDENTITY CASCADE`); err != nil {
 				t.Fatalf("truncate: %v", err)
 			}
 			t.Cleanup(s.db.Close)
@@ -175,10 +176,12 @@ func TestJobsClaimOrderAndExclusivity(t *testing.T) {
 		if j, err := s.ClaimNextJob(ctx, "p"); j != nil || err != nil {
 			t.Fatalf("empty queue: got %+v, %v; want nil, nil", j, err)
 		}
+		// Distinct workspaces: jobs sharing one workspace are serialised by design
+		// (TestClaimSkipsWorkspacesWithARunningJob) and would hide the race this checks.
 		base := time.Now().Add(-time.Hour)
 		for i, id := range []string{"j-old", "j-mid", "j-new"} {
 			err := s.CreateJob(ctx, &models.ProvisionJob{
-				ID: id, WorkspaceID: "w", Action: models.JobStart, Status: models.JobPending,
+				ID: id, WorkspaceID: "w-" + id, Action: models.JobStart, Status: models.JobPending,
 				CreatedAt: base.Add(time.Duration(i) * time.Minute), UpdatedAt: base,
 			})
 			if err != nil {
@@ -380,6 +383,130 @@ func TestAgentOwnerLease(t *testing.T) {
 		}
 		if o, _ := os.GetAgentOwner(ctx, "w1"); o != nil {
 			t.Fatalf("a lapsed lease still answered: %+v", o)
+		}
+	})
+}
+
+// A pending job whose workspace already has a running job must stay queued — two
+// processes running Terraform on one workspace state corrupt it.
+func TestClaimSkipsWorkspacesWithARunningJob(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		mk := func(id, ws string, age time.Duration) {
+			if err := s.CreateJob(ctx, &models.ProvisionJob{
+				ID: id, WorkspaceID: ws, Action: "create", Status: models.JobPending,
+				CreatedAt: time.Now().Add(-age), UpdatedAt: time.Now(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mk("j1", "w1", 3*time.Minute) // oldest
+		mk("j2", "w1", 2*time.Minute) // same workspace — must wait for j1
+		mk("j3", "w2", 1*time.Minute)
+
+		j, err := s.ClaimNextJob(ctx, "p1")
+		if err != nil || j == nil || j.ID != "j1" {
+			t.Fatalf("first claim: %+v err=%v, want j1", j, err)
+		}
+		// j1 is running; the next claim must skip j2 and take w2's job.
+		j, err = s.ClaimNextJob(ctx, "p2")
+		if err != nil || j == nil || j.ID != "j3" {
+			t.Fatalf("second claim: %+v err=%v, want j3 (j2's workspace is busy)", j, err)
+		}
+		if j, _ := s.ClaimNextJob(ctx, "p3"); j != nil {
+			t.Fatalf("third claim got %s, want nothing (only j2 is left and its workspace is busy)", j.ID)
+		}
+
+		// j1 finishes; j2 becomes claimable.
+		done, _ := s.GetJob(ctx, "j1")
+		done.Status = models.JobDone
+		if err := s.UpdateJob(ctx, done); err != nil {
+			t.Fatal(err)
+		}
+		j, err = s.ClaimNextJob(ctx, "p4")
+		if err != nil || j == nil || j.ID != "j2" {
+			t.Fatalf("after j1 finished: %+v err=%v, want j2", j, err)
+		}
+	})
+}
+
+// CLI device-login codes live in the store so the flow survives landing on different
+// replicas. One-time use and expiry are the security properties.
+func TestDeviceCodes(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		dcs, ok := s.(DeviceCodeStore)
+		if !ok {
+			t.Skipf("%T does not hold device codes", s)
+		}
+		ctx := context.Background()
+		exp := time.Now().Add(time.Minute)
+
+		if _, err := dcs.TakeDeviceCode(ctx, "nope"); err != ErrNotFound {
+			t.Fatalf("unknown code: err=%v, want ErrNotFound", err)
+		}
+		if err := dcs.CreateDeviceCode(ctx, "c1", exp); err != nil {
+			t.Fatal(err)
+		}
+		if err := dcs.CreateDeviceCode(ctx, "c1", exp); err != ErrConflict {
+			t.Fatalf("duplicate code: err=%v, want ErrConflict", err)
+		}
+		if tok, err := dcs.TakeDeviceCode(ctx, "c1"); err != nil || tok != "" {
+			t.Fatalf("pending code: tok=%q err=%v, want empty and nil", tok, err)
+		}
+		if err := dcs.ApproveDeviceCode(ctx, "c1", "tok-123"); err != nil {
+			t.Fatal(err)
+		}
+		if tok, err := dcs.TakeDeviceCode(ctx, "c1"); err != nil || tok != "tok-123" {
+			t.Fatalf("approved code: tok=%q err=%v", tok, err)
+		}
+		if _, err := dcs.TakeDeviceCode(ctx, "c1"); err != ErrNotFound {
+			t.Fatalf("second take: err=%v, want ErrNotFound (one-time use)", err)
+		}
+
+		// Expired codes answer nothing and don't count.
+		if err := dcs.CreateDeviceCode(ctx, "old", time.Now().Add(-time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := dcs.ApproveDeviceCode(ctx, "old", "x"); err != ErrNotFound {
+			t.Fatalf("approving an expired code: err=%v, want ErrNotFound", err)
+		}
+		if _, err := dcs.TakeDeviceCode(ctx, "old"); err != ErrNotFound {
+			t.Fatalf("taking an expired code: err=%v, want ErrNotFound", err)
+		}
+		dcs.CreateDeviceCode(ctx, "live", exp)
+		if n, err := dcs.CountDeviceCodes(ctx); err != nil || n != 1 {
+			t.Fatalf("count=%d err=%v, want 1 (expired codes don't count)", n, err)
+		}
+	})
+}
+
+// The registration lock must actually exclude: what runs inside never overlaps.
+func TestRegistrationLockExcludes(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		rl, ok := s.(RegistrationLocker)
+		if !ok {
+			t.Skipf("%T has no registration lock", s)
+		}
+		ctx := context.Background()
+		var inside, overlaps int32
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rl.WithRegistrationLock(ctx, func() error {
+					if n := atomic.AddInt32(&inside, 1); n > 1 {
+						atomic.AddInt32(&overlaps, 1)
+					}
+					time.Sleep(5 * time.Millisecond)
+					atomic.AddInt32(&inside, -1)
+					return nil
+				})
+			}()
+		}
+		wg.Wait()
+		if overlaps != 0 {
+			t.Fatalf("%d goroutines were inside the lock at once", overlaps)
 		}
 	})
 }

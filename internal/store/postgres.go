@@ -232,9 +232,12 @@ func (s *PostgresStore) ClaimNextJob(ctx context.Context, provisionerID string) 
 	}
 	defer tx.Rollback(ctx)
 
+	// One job at a time per workspace: a pending job whose workspace already has a
+	// running job stays queued, or two provisioners could run Terraform on one state.
 	row := tx.QueryRow(ctx, `
 		SELECT id,workspace_id,action,status,provisioner_id,retry_count,created_at,updated_at,heartbeat,error
 		FROM jobs WHERE status='pending'
+		AND workspace_id NOT IN (SELECT workspace_id FROM jobs WHERE status='running')
 		ORDER BY created_at ASC
 		LIMIT 1 FOR UPDATE SKIP LOCKED`)
 	j, err := scanJob(row)
@@ -959,7 +962,81 @@ CREATE TABLE IF NOT EXISTS agent_owners (
     pod_addr     TEXT NOT NULL,
     lease_until  TIMESTAMPTZ NOT NULL
 );
+CREATE TABLE IF NOT EXISTS device_codes (
+    code       TEXT PRIMARY KEY,
+    token      TEXT NOT NULL DEFAULT '',
+    expires_at TIMESTAMPTZ NOT NULL
+);
 `
+
+// ─── Device-login codes ──────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateDeviceCode(ctx context.Context, code string, expiresAt time.Time) error {
+	// Login inits are rare; sweep expired codes here so the table stays small.
+	_, _ = s.db.Exec(ctx, `DELETE FROM device_codes WHERE expires_at < now()`)
+	_, err := s.db.Exec(ctx, `INSERT INTO device_codes (code, expires_at) VALUES ($1,$2)`, code, expiresAt)
+	if err != nil && isUniqueViolation(err) {
+		return ErrConflict
+	}
+	return err
+}
+
+func (s *PostgresStore) ApproveDeviceCode(ctx context.Context, code, token string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE device_codes SET token=$2
+		WHERE code=$1 AND expires_at > now()`, code, token)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) TakeDeviceCode(ctx context.Context, code string) (string, error) {
+	// One-time use: the delete and the read are one statement, so two concurrent polls
+	// cannot both walk away with the token.
+	var token string
+	err := s.db.QueryRow(ctx, `DELETE FROM device_codes
+		WHERE code=$1 AND expires_at > now() AND token <> '' RETURNING token`, code).Scan(&token)
+	if err == nil {
+		return token, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	var pending bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM device_codes
+		WHERE code=$1 AND expires_at > now())`, code).Scan(&pending); err != nil {
+		return "", err
+	}
+	if !pending {
+		return "", ErrNotFound
+	}
+	return "", nil
+}
+
+func (s *PostgresStore) CountDeviceCodes(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM device_codes WHERE expires_at > now()`).Scan(&n)
+	return n, err
+}
+
+// WithRegistrationLock holds a cluster-wide advisory lock while fn decides whether the
+// registering user is the first (and therefore the admin).
+func (s *PostgresStore) WithRegistrationLock(ctx context.Context, fn func() error) error {
+	conn, err := s.db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	const registrationLock = 0x7265676c // "regl"
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, registrationLock); err != nil {
+		return err
+	}
+	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, registrationLock)
+	return fn()
+}
 
 // ─── Agent ownership (multi-replica relay) ───────────────────────────────────
 

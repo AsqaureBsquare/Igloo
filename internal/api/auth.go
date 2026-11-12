@@ -111,18 +111,30 @@ func (h *Handler) OIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find or create the user — link by email.
+	// Find or create the user — link by email. Creation takes the registration lock:
+	// "the first user becomes admin" must be decided once, even across replicas.
 	user, err := h.Store.GetUserByEmail(r.Context(), email)
 	if err != nil {
-		existing, _ := h.Store.ListUsers(r.Context())
-		user = &models.User{
-			ID:        uuid.NewString(),
-			Email:     email,
-			Name:      name,
-			IsAdmin:   len(existing) == 0,
-			CreatedAt: time.Now(),
-		}
-		if err := h.Store.CreateUser(r.Context(), user); err != nil {
+		h.withRegistrationLock(r.Context(), func() error {
+			if u, err := h.Store.GetUserByEmail(r.Context(), email); err == nil {
+				user = u // another login created it while we waited for the lock
+				return nil
+			}
+			u := &models.User{
+				ID:        uuid.NewString(),
+				Email:     email,
+				Name:      name,
+				CreatedAt: time.Now(),
+			}
+			existing, _ := h.Store.ListUsers(r.Context())
+			u.IsAdmin = len(existing) == 0
+			if err := h.Store.CreateUser(r.Context(), u); err != nil {
+				return err
+			}
+			user = u
+			return nil
+		})
+		if user == nil {
 			http.Redirect(w, r, "/?oidc_error=failed to create user", http.StatusFound)
 			return
 		}
@@ -186,43 +198,55 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	// First user to register becomes admin. After that, signup stays closed unless
 	// IGLOO_ALLOW_SIGNUP=true; otherwise an admin creates accounts.
+	h.withRegistrationLock(r.Context(), func() error {
+		existing, _ := h.Store.ListUsers(r.Context())
+		isFirst := len(existing) == 0
+		if !isFirst && !h.AllowSignup {
+			h.err(w, http.StatusForbidden, "sign-up is closed — ask an admin to create your account")
+			return nil
+		}
+
+		user := &models.User{
+			ID:           uuid.NewString(),
+			Email:        strings.ToLower(strings.TrimSpace(body.Email)),
+			Name:         strings.TrimSpace(body.Name),
+			PasswordHash: hash,
+			IsAdmin:      isFirst,
+			CreatedAt:    time.Now(),
+		}
+
+		if err := h.Store.CreateUser(r.Context(), user); err != nil {
+			if err == store.ErrConflict {
+				h.err(w, http.StatusConflict, "email already registered")
+				return nil
+			}
+			h.err(w, http.StatusInternalServerError, "internal error")
+			return nil
+		}
+
+		token, err := h.Auth.SignUser(user.ID, user.Email)
+		if err != nil {
+			h.err(w, http.StatusInternalServerError, "internal error")
+			return nil
+		}
+
+		h.json(w, http.StatusCreated, map[string]any{
+			"token": token,
+			"user":  user,
+		})
+		return nil
+	})
+}
+
+// withRegistrationLock serialises "is this the first user, who becomes admin": within
+// this process always, and across replicas when the store can hold a lock.
+func (h *Handler) withRegistrationLock(ctx context.Context, fn func() error) error {
 	h.regMu.Lock()
 	defer h.regMu.Unlock()
-	existing, _ := h.Store.ListUsers(r.Context())
-	isFirst := len(existing) == 0
-	if !isFirst && !h.AllowSignup {
-		h.err(w, http.StatusForbidden, "sign-up is closed — ask an admin to create your account")
-		return
+	if rl, ok := h.Store.(store.RegistrationLocker); ok {
+		return rl.WithRegistrationLock(ctx, fn)
 	}
-
-	user := &models.User{
-		ID:           uuid.NewString(),
-		Email:        strings.ToLower(strings.TrimSpace(body.Email)),
-		Name:         strings.TrimSpace(body.Name),
-		PasswordHash: hash,
-		IsAdmin:      isFirst,
-		CreatedAt:    time.Now(),
-	}
-
-	if err := h.Store.CreateUser(r.Context(), user); err != nil {
-		if err == store.ErrConflict {
-			h.err(w, http.StatusConflict, "email already registered")
-			return
-		}
-		h.err(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-
-	token, err := h.Auth.SignUser(user.ID, user.Email)
-	if err != nil {
-		h.err(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-
-	h.json(w, http.StatusCreated, map[string]any{
-		"token": token,
-		"user":  user,
-	})
+	return fn()
 }
 
 // POST /api/auth/login
@@ -292,6 +316,30 @@ func (h *Handler) DeviceInit(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusBadRequest, "invalid code")
 		return
 	}
+
+	// Codes live in the store when it can hold them, so the login works when the CLI
+	// registers its code on one replica and polls another.
+	if dcs, ok := h.Store.(store.DeviceCodeStore); ok {
+		n, err := dcs.CountDeviceCodes(r.Context())
+		if err != nil {
+			h.err(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if n >= 1000 {
+			h.err(w, http.StatusTooManyRequests, "too many pending logins — try again shortly")
+			return
+		}
+		switch err := dcs.CreateDeviceCode(r.Context(), body.Code, time.Now().Add(5*time.Minute)); err {
+		case nil:
+			w.WriteHeader(http.StatusOK)
+		case store.ErrConflict:
+			h.err(w, http.StatusConflict, "code already in use — generate a new one")
+		default:
+			h.err(w, http.StatusInternalServerError, "internal error")
+		}
+		return
+	}
+
 	h.initDeviceCodes()
 	h.gcDeviceCodes()
 	h.deviceMu.Lock()
@@ -314,15 +362,6 @@ func (h *Handler) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusBadRequest, "missing code")
 		return
 	}
-	h.deviceMu.Lock()
-	entry, ok := h.deviceCodes[body.Code]
-	if !ok || time.Now().After(entry.expiresAt) {
-		h.deviceMu.Unlock()
-		h.err(w, http.StatusGone, "code expired or invalid")
-		return
-	}
-	h.deviceMu.Unlock()
-
 	user, err := h.Store.GetUser(r.Context(), ctxUserID(r))
 	if err != nil {
 		h.err(w, http.StatusNotFound, "user not found")
@@ -334,7 +373,22 @@ func (h *Handler) DeviceApprove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if dcs, ok := h.Store.(store.DeviceCodeStore); ok {
+		if err := dcs.ApproveDeviceCode(r.Context(), body.Code, token); err != nil {
+			h.err(w, http.StatusGone, "code expired or invalid")
+			return
+		}
+		h.json(w, http.StatusOK, map[string]string{"email": user.Email})
+		return
+	}
+
 	h.deviceMu.Lock()
+	entry, ok := h.deviceCodes[body.Code]
+	if !ok || time.Now().After(entry.expiresAt) {
+		h.deviceMu.Unlock()
+		h.err(w, http.StatusGone, "code expired or invalid")
+		return
+	}
 	entry.token = token
 	h.deviceMu.Unlock()
 
@@ -348,6 +402,21 @@ func (h *Handler) DevicePoll(w http.ResponseWriter, r *http.Request) {
 		h.err(w, http.StatusBadRequest, "missing code")
 		return
 	}
+	if dcs, ok := h.Store.(store.DeviceCodeStore); ok {
+		token, err := dcs.TakeDeviceCode(r.Context(), code)
+		switch {
+		case err == store.ErrNotFound:
+			h.err(w, http.StatusGone, "code expired or invalid")
+		case err != nil:
+			h.err(w, http.StatusInternalServerError, "internal error")
+		case token == "":
+			w.WriteHeader(http.StatusAccepted) // 202 = still pending
+		default:
+			h.json(w, http.StatusOK, map[string]string{"token": token})
+		}
+		return
+	}
+
 	h.deviceMu.Lock()
 	entry, ok := h.deviceCodes[code]
 	if !ok || time.Now().After(entry.expiresAt) {

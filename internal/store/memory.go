@@ -34,6 +34,13 @@ type MemoryStore struct {
 	teamMembers    map[string]*models.TeamMember      // teamID+userID → member
 	guardEvents    map[string][]models.GuardEvent     // workspaceID → events, oldest first
 	agentOwners    map[string]*models.AgentOwner      // workspaceID → owning replica lease
+	deviceCodes    map[string]*deviceCode             // CLI login code → state
+	regLock        sync.Mutex                         // serialises first-user registration
+}
+
+type deviceCode struct {
+	token     string
+	expiresAt time.Time
 }
 
 func NewMemory() *MemoryStore {
@@ -54,7 +61,70 @@ func NewMemory() *MemoryStore {
 		teamMembers: make(map[string]*models.TeamMember),
 		guardEvents: make(map[string][]models.GuardEvent),
 		agentOwners: make(map[string]*models.AgentOwner),
+		deviceCodes: make(map[string]*deviceCode),
 	}
+}
+
+// ─── Device-login codes ──────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateDeviceCode(_ context.Context, code string, expiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c, e := range s.deviceCodes { // lazy expiry
+		if time.Now().After(e.expiresAt) {
+			delete(s.deviceCodes, c)
+		}
+	}
+	if e, ok := s.deviceCodes[code]; ok && time.Now().Before(e.expiresAt) {
+		return ErrConflict
+	}
+	s.deviceCodes[code] = &deviceCode{expiresAt: expiresAt}
+	return nil
+}
+
+func (s *MemoryStore) ApproveDeviceCode(_ context.Context, code, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.deviceCodes[code]
+	if !ok || time.Now().After(e.expiresAt) {
+		return ErrNotFound
+	}
+	e.token = token
+	return nil
+}
+
+func (s *MemoryStore) TakeDeviceCode(_ context.Context, code string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.deviceCodes[code]
+	if !ok || time.Now().After(e.expiresAt) {
+		return "", ErrNotFound
+	}
+	if e.token == "" {
+		return "", nil
+	}
+	delete(s.deviceCodes, code) // one-time use
+	return e.token, nil
+}
+
+func (s *MemoryStore) CountDeviceCodes(_ context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, e := range s.deviceCodes {
+		if time.Now().Before(e.expiresAt) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// WithRegistrationLock serialises first-user registration. In-memory the store lives in
+// one process, so a plain mutex is the whole story.
+func (s *MemoryStore) WithRegistrationLock(_ context.Context, fn func() error) error {
+	s.regLock.Lock()
+	defer s.regLock.Unlock()
+	return fn()
 }
 
 // ─── Agent ownership (multi-replica relay) ───────────────────────────────────
@@ -362,9 +432,17 @@ func (s *MemoryStore) GetJob(_ context.Context, id string) (*models.ProvisionJob
 func (s *MemoryStore) ClaimNextJob(_ context.Context, provisionerID string) (*models.ProvisionJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// One job at a time per workspace: a pending job whose workspace already has a
+	// running job stays queued, or two processes could run Terraform on one state.
+	running := map[string]bool{}
+	for _, j := range s.jobs {
+		if j.Status == models.JobRunning {
+			running[j.WorkspaceID] = true
+		}
+	}
 	var oldest *models.ProvisionJob
 	for _, j := range s.jobs {
-		if j.Status != models.JobPending {
+		if j.Status != models.JobPending || running[j.WorkspaceID] {
 			continue
 		}
 		if oldest == nil || j.CreatedAt.Before(oldest.CreatedAt) {

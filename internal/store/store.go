@@ -112,6 +112,29 @@ type AgentOwnerStore interface {
 	DeleteAgentOwner(ctx context.Context, workspaceID, replicaID string) error
 }
 
+// DeviceCodeStore is implemented by stores that can hold CLI device-login codes, so the
+// login works when `igloo login` registers its code on one server replica and polls
+// another. A store without it keeps codes in the handler's memory (single replica only).
+type DeviceCodeStore interface {
+	// CreateDeviceCode registers a pending login. ErrConflict when the code is taken.
+	CreateDeviceCode(ctx context.Context, code string, expiresAt time.Time) error
+	// ApproveDeviceCode attaches the signed CLI token to a pending code.
+	// ErrNotFound when the code is unknown or expired.
+	ApproveDeviceCode(ctx context.Context, code, token string) error
+	// TakeDeviceCode returns the token and deletes the code in one step (one-time use),
+	// or "" while the code is still pending. ErrNotFound when unknown or expired.
+	TakeDeviceCode(ctx context.Context, code string) (string, error)
+	// CountDeviceCodes reports how many codes are pending (for the abuse cap).
+	CountDeviceCodes(ctx context.Context) (int, error)
+}
+
+// RegistrationLocker is implemented by stores that can serialise "the first registered
+// user becomes admin" across replicas. Without it the handler's local mutex still
+// protects a single replica.
+type RegistrationLocker interface {
+	WithRegistrationLock(ctx context.Context, fn func() error) error
+}
+
 // GuardEventStore is implemented by stores that can keep the egress gateway's audit
 // trail. It is separate from Store so a backend without it still works (activity is then
 // reported as unsupported).
@@ -127,6 +150,10 @@ const MaxGuardEventsPerWorkspace = 5000
 
 // The backends that can run more than one server replica.
 var (
-	_ AgentOwnerStore = (*MemoryStore)(nil) // one process only — for tests and --local
-	_ AgentOwnerStore = (*PostgresStore)(nil)
+	_ AgentOwnerStore    = (*MemoryStore)(nil) // one process only — for tests and --local
+	_ AgentOwnerStore    = (*PostgresStore)(nil)
+	_ DeviceCodeStore    = (*MemoryStore)(nil)
+	_ DeviceCodeStore    = (*PostgresStore)(nil)
+	_ RegistrationLocker = (*MemoryStore)(nil)
+	_ RegistrationLocker = (*PostgresStore)(nil)
 )

@@ -135,6 +135,17 @@ type RegistrationLocker interface {
 	WithRegistrationLock(ctx context.Context, fn func() error) error
 }
 
+// ProvisionLogStore is implemented by stores that can keep workspace build logs, so a
+// browser watching the log on one replica sees lines the provisioner reports to another.
+// A store without it buffers lines in the handler's memory (single replica only).
+type ProvisionLogStore interface {
+	// AppendProvisionLog stores one line and returns its sequence number.
+	AppendProvisionLog(ctx context.Context, workspaceID, line string) (int64, error)
+	// ListProvisionLogs returns the lines with Seq > afterSeq, oldest first.
+	ListProvisionLogs(ctx context.Context, workspaceID string, afterSeq int64) ([]models.ProvisionLogLine, error)
+	DeleteProvisionLogs(ctx context.Context, workspaceID string) error
+}
+
 // GuardEventStore is implemented by stores that can keep the egress gateway's audit
 // trail. It is separate from Store so a backend without it still works (activity is then
 // reported as unsupported).
@@ -156,4 +167,6 @@ var (
 	_ DeviceCodeStore    = (*PostgresStore)(nil)
 	_ RegistrationLocker = (*MemoryStore)(nil)
 	_ RegistrationLocker = (*PostgresStore)(nil)
+	_ ProvisionLogStore  = (*MemoryStore)(nil)
+	_ ProvisionLogStore  = (*PostgresStore)(nil)
 )

@@ -36,6 +36,8 @@ type MemoryStore struct {
 	agentOwners    map[string]*models.AgentOwner      // workspaceID → owning replica lease
 	deviceCodes    map[string]*deviceCode             // CLI login code → state
 	regLock        sync.Mutex                         // serialises first-user registration
+	provLogs       map[string][]models.ProvisionLogLine // workspaceID → lines, oldest first
+	provLogSeq     int64                              // global, so seqs order across workspaces too
 }
 
 type deviceCode struct {
@@ -62,7 +64,44 @@ func NewMemory() *MemoryStore {
 		guardEvents: make(map[string][]models.GuardEvent),
 		agentOwners: make(map[string]*models.AgentOwner),
 		deviceCodes: make(map[string]*deviceCode),
+		provLogs:    make(map[string][]models.ProvisionLogLine),
 	}
+}
+
+// ─── Provision logs ──────────────────────────────────────────────────────────
+
+// maxProvisionLogLines bounds how much build output one workspace keeps.
+const maxProvisionLogLines = 500
+
+func (s *MemoryStore) AppendProvisionLog(_ context.Context, workspaceID, line string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provLogSeq++
+	lines := append(s.provLogs[workspaceID], models.ProvisionLogLine{Seq: s.provLogSeq, Line: line})
+	if len(lines) > maxProvisionLogLines {
+		lines = lines[len(lines)-maxProvisionLogLines:]
+	}
+	s.provLogs[workspaceID] = lines
+	return s.provLogSeq, nil
+}
+
+func (s *MemoryStore) ListProvisionLogs(_ context.Context, workspaceID string, afterSeq int64) ([]models.ProvisionLogLine, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []models.ProvisionLogLine
+	for _, l := range s.provLogs[workspaceID] {
+		if l.Seq > afterSeq {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) DeleteProvisionLogs(_ context.Context, workspaceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.provLogs, workspaceID)
+	return nil
 }
 
 // ─── Device-login codes ──────────────────────────────────────────────────────

@@ -222,3 +222,11 @@ type AgentOwner struct {
 	PodAddr     string    `json:"pod_addr"` // host:port of the replica's internal listener
 	LeaseUntil  time.Time `json:"lease_until"`
 }
+
+// ProvisionLogLine is one stored line of a workspace's Terraform/build output.
+// Seq orders lines and lets a reader tail "everything after what I have seen",
+// whichever server replica received the line.
+type ProvisionLogLine struct {
+	Seq  int64  `json:"seq"`
+	Line string `json:"line"`
+}

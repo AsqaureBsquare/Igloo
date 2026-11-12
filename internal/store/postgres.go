@@ -967,6 +967,12 @@ CREATE TABLE IF NOT EXISTS device_codes (
     token      TEXT NOT NULL DEFAULT '',
     expires_at TIMESTAMPTZ NOT NULL
 );
+CREATE TABLE IF NOT EXISTS provision_logs (
+    id           BIGSERIAL PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    line         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS provision_logs_ws_id_idx ON provision_logs(workspace_id, id);
 `
 
 // ─── Device-login codes ──────────────────────────────────────────────────────
@@ -1036,6 +1042,46 @@ func (s *PostgresStore) WithRegistrationLock(ctx context.Context, fn func() erro
 	}
 	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, registrationLock)
 	return fn()
+}
+
+// ─── Provision logs ──────────────────────────────────────────────────────────
+
+func (s *PostgresStore) AppendProvisionLog(ctx context.Context, workspaceID, line string) (int64, error) {
+	var seq int64
+	err := s.db.QueryRow(ctx, `INSERT INTO provision_logs (workspace_id, line)
+		VALUES ($1,$2) RETURNING id`, workspaceID, line).Scan(&seq)
+	if err != nil {
+		return 0, err
+	}
+	// Trim occasionally rather than on every line — logs arrive in bursts.
+	if seq%64 == 0 {
+		_, _ = s.db.Exec(ctx, `DELETE FROM provision_logs WHERE workspace_id=$1 AND id NOT IN
+			(SELECT id FROM provision_logs WHERE workspace_id=$1 ORDER BY id DESC LIMIT 500)`, workspaceID)
+	}
+	return seq, nil
+}
+
+func (s *PostgresStore) ListProvisionLogs(ctx context.Context, workspaceID string, afterSeq int64) ([]models.ProvisionLogLine, error) {
+	rows, err := s.db.Query(ctx, `SELECT id, line FROM provision_logs
+		WHERE workspace_id=$1 AND id > $2 ORDER BY id ASC LIMIT 1000`, workspaceID, afterSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ProvisionLogLine
+	for rows.Next() {
+		var l models.ProvisionLogLine
+		if err := rows.Scan(&l.Seq, &l.Line); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) DeleteProvisionLogs(ctx context.Context, workspaceID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM provision_logs WHERE workspace_id=$1`, workspaceID)
+	return err
 }
 
 // ─── Agent ownership (multi-replica relay) ───────────────────────────────────

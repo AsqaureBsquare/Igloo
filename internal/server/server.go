@@ -41,6 +41,11 @@ func New(st store.Store, a *auth.Auth) *Server {
 		NetMap:      api.NewNetMapStore(),
 	}
 	h.Relay.OnAgentMessage(h.NetMap.HandleAgentMessage)
+	// Build logs follow the store when it can keep them, so the SSE stream works on a
+	// replica other than the one the provisioner reports to.
+	if ls, ok := st.(api.LogStore); ok {
+		h.LogBuf.Back(ls)
+	}
 
 	// Wire up OIDC if configured via environment variables.
 	if issuer := os.Getenv("IGLOO_OIDC_ISSUER_URL"); issuer != "" {

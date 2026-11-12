@@ -27,7 +27,7 @@ func stores(t *testing.T) map[string]func(t *testing.T) Store {
 			}
 			// Isolate each test: start from empty tables.
 			if _, err := s.db.Exec(context.Background(),
-				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners, device_codes RESTART IDENTITY CASCADE`); err != nil {
+				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners, device_codes, provision_logs RESTART IDENTITY CASCADE`); err != nil {
 				t.Fatalf("truncate: %v", err)
 			}
 			t.Cleanup(s.db.Close)
@@ -507,6 +507,49 @@ func TestRegistrationLockExcludes(t *testing.T) {
 		wg.Wait()
 		if overlaps != 0 {
 			t.Fatalf("%d goroutines were inside the lock at once", overlaps)
+		}
+	})
+}
+
+// Build-log lines persist with ordered sequence numbers so any replica can serve the
+// stream: tail with "after seq N" and nothing duplicates or goes missing.
+func TestProvisionLogs(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		pls, ok := s.(ProvisionLogStore)
+		if !ok {
+			t.Skipf("%T does not keep provision logs", s)
+		}
+		ctx := context.Background()
+
+		var seqs []int64
+		for _, line := range []string{"one", "two", "three"} {
+			seq, err := pls.AppendProvisionLog(ctx, "w1", line)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seqs = append(seqs, seq)
+		}
+		pls.AppendProvisionLog(ctx, "w2", "other workspace")
+
+		all, err := pls.ListProvisionLogs(ctx, "w1", 0)
+		if err != nil || len(all) != 3 || all[0].Line != "one" || all[2].Line != "three" {
+			t.Fatalf("all lines = %+v err=%v", all, err)
+		}
+		if !(all[0].Seq < all[1].Seq && all[1].Seq < all[2].Seq) {
+			t.Fatalf("sequence numbers not increasing: %+v", all)
+		}
+		tail, err := pls.ListProvisionLogs(ctx, "w1", seqs[0])
+		if err != nil || len(tail) != 2 || tail[0].Line != "two" {
+			t.Fatalf("tail after first = %+v err=%v", tail, err)
+		}
+		if err := pls.DeleteProvisionLogs(ctx, "w1"); err != nil {
+			t.Fatal(err)
+		}
+		if left, _ := pls.ListProvisionLogs(ctx, "w1", 0); len(left) != 0 {
+			t.Fatalf("lines survived delete: %+v", left)
+		}
+		if other, _ := pls.ListProvisionLogs(ctx, "w2", 0); len(other) != 1 {
+			t.Fatalf("w2's lines were deleted with w1's: %+v", other)
 		}
 	})
 }

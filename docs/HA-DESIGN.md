@@ -31,7 +31,7 @@ fixes the downtime only if each request can be served by either replica.
 | CLI device-login codes | `deviceCodes` map | `igloo login` starts on A and polls B: "invalid code". | Table with expiry; one-time use becomes `DELETE ... RETURNING` |
 | "First registered user is admin" lock | `regMu` | Two replicas can each create a first admin. | Decide inside one transaction (advisory lock or `INSERT ... WHERE NOT EXISTS`) |
 | Login/password throttling counters | `ratelimit` | The limit is multiplied by the replica count. | Counter table with a time window (acceptable to ship later; it degrades the limit, it does not break anything) |
-| Network snapshot per workspace | `NetMapStore` | The Network tab shows nothing when it hits the other replica. | Ask the owner replica (same path as the relay), or store the latest snapshot |
+| Network snapshot per workspace | `NetMapStore` | The Network tab shows nothing when it hits the other replica. | **Done:** the latest snapshot persists (coalesced 1s flusher); a replica that has not heard from the agent answers from the store |
 | One job at a time per workspace | `inFlight` in worker and daemon | Two jobs for one workspace can run on two processes. | Make `ClaimNextJob` skip workspaces that already have a running job |
 | The in-memory store (`--local`) | `store.Memory` | Each replica would have its own database. | Refuse `replicas > 1` with the in-memory store (chart check and server start-up check) |
 

@@ -16,6 +16,7 @@ Teams adopting AI agents hit the same two questions: *what can this thing reach?
 - **Credentials the workload never sees.** Declare a route (`llm → api.example.com, header Authorization, secret LLM_KEY`); the workspace calls the gateway with a scoped token and the gateway injects the real key. Keys never enter the container, its env, or your database.
 - **A record of everything.** Every allowed and refused connection is an audit event you can read per workspace, in the UI or the API.
 - **Self-hosted, one Helm install.** Single Go binary, bundled Postgres or your own, no SaaS, no per-seat pricing. Your cluster, your data, your policies.
+- **Stays up through deploys.** Set `server.replicas: 2` and the control plane survives pod loss and rolling upgrades: replicas share state through Postgres and forward to whichever one holds a workspace's agent — failover in seconds, included in the product, not behind an enterprise license.
 - **Humans too.** The same workspaces serve developers: VS Code and terminal in the browser, SSH, auto-sleep when idle (~$0 compute), ~15s wake with disk intact.
 
 How this compares: cloud sandbox services (E2B, Daytona, Modal) run your agents on *their* infrastructure; dev-workspace platforms (Coder) manage workspaces but have no egress gateway, credential broker, or network audit; LLM proxies broker credentials but don't isolate the workload. Igloo packages all of it, self-hosted.
@@ -95,6 +96,7 @@ Notes:
 - **Gateway secrets:** put upstream keys in a Kubernetes Secret and point `guard.existingSecret` at it — values never reach Igloo's database.
 - **Sandbox image:** sandboxes cannot install packages at start-up (no network), so give them an image that has what they need: `--set server.sandboxImage=ghcr.io/asqaurebsquare/igloo-workspace:latest`.
 - **No default StorageClass** (bare EKS, some bare-metal): set `postgresql.storageClass` and `provisioner.workspace.stateStorageClass`.
+- **High availability:** `--set server.replicas=2` keeps Igloo up through deploys and pod loss (needs the PostgreSQL store; the chart refuses otherwise). Replicas forward to each other over an internal port that never touches your ingress. Design and failure semantics: `docs/HA-DESIGN.md`.
 - A published OCI chart exists (`oci://ghcr.io/asquarebsquare/igloo`) but currently lags this repository; install from source until the next chart release.
 
 ### Organisation-wide baseline
@@ -129,6 +131,7 @@ HTTPS to an allowed host is allowed or refused **by name, not decrypted** — th
 | Deploy target | Single region | **Provisioners anywhere** |
 | Self-host | PostgreSQL + server + proxy | **Single binary** |
 | Connectivity | VPN / WireGuard | **Plain WebSocket (443)** |
+| High availability | Paid enterprise feature | **`server.replicas: 2`, included** |
 
 Sleep scales the deployment to zero (Kubernetes) or stops the Fargate task (ECS); the disk persists. Wake reschedules and remounts — no Terraform re-run.
 

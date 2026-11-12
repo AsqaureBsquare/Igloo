@@ -1,12 +1,18 @@
 # Running more than one server replica
 
-Status: phases 1 and 4 built. Phase 1: owner lease + relay forwarding for exec/files/HTTP,
-behind `IGLOO_INTERNAL_ADDR`; concurrent-start migration deadlock fixed with an advisory
-lock. Phase 4: device-login codes in the store, first-admin decided under a store-wide
-lock (including the OIDC path), one-job-per-workspace enforced in the claim, 3s dispatch
-sweep, build logs persisted and tailed by sequence number, and SIGTERM actually stops the
-process. Phases 2, 3, 5 and 6 remain design. A single replica without
-`IGLOO_INTERNAL_ADDR` behaves exactly as before.
+Status: phases 1, 4 and 5 built; phase 6 partly run. Phase 1: owner lease + relay
+forwarding for exec/files/HTTP, behind `IGLOO_INTERNAL_ADDR`; concurrent-start migration
+deadlock fixed with an advisory lock. Phase 4: device-login codes in the store,
+first-admin decided under a store-wide lock (including the OIDC path),
+one-job-per-workspace enforced in the claim, 3s dispatch sweep, build logs persisted and
+tailed by sequence number, and SIGTERM actually stops the process. Phase 5:
+`server.replicas` wires everything (downward-API pod address, PDB, internal-port
+NetworkPolicy) and refuses non-Postgres stores at template time. Phase 6 so far, live on
+a k3s cluster with 2 replicas: killing the replica that owned a running workspace's
+agent — the agent reconnected to the survivor and took the ownership row in under 5
+seconds, before the replacement pod was even ready. Still to run: kill mid-terminal and
+mid-build, and a rolling restart during a full e2e. Phases 2 and 3 remain design. A
+single replica renders and behaves exactly as before.
 
 ## Why
 

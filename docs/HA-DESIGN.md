@@ -1,9 +1,12 @@
 # Running more than one server replica
 
-Status: phase 1 built (owner lease + relay forwarding for exec/files/HTTP, behind
-`IGLOO_INTERNAL_ADDR`; concurrent-start migration deadlock fixed with an advisory lock).
-Phases 2–6 remain design. A single replica without `IGLOO_INTERNAL_ADDR` behaves exactly
-as before.
+Status: phases 1 and most of 4 built. Phase 1: owner lease + relay forwarding for
+exec/files/HTTP, behind `IGLOO_INTERNAL_ADDR`; concurrent-start migration deadlock fixed
+with an advisory lock. Phase 4: device-login codes in the store, first-admin decided
+under a store-wide lock (including the OIDC path), one-job-per-workspace enforced in the
+claim, 3s dispatch sweep, and SIGTERM actually stops the process. Still open from phase
+4: the log buffer. Phases 2, 3, 5 and 6 remain design. A single replica without
+`IGLOO_INTERNAL_ADDR` behaves exactly as before.
 
 ## Why
 
@@ -75,7 +78,11 @@ Details for option 3:
    their dedicated phase-2 concerns are reconnect behaviour and port-forward edge cases.
 2. Terminals (browser WebSocket) and port-forward through the owner.
 3. Tailnet coordinator through the owner.
-4. Job dispatch sweep; log buffer; device codes; first-user lock; per-workspace job exclusion.
+4. **Done except the log buffer.** Job dispatch sweep (3s, every replica; the claim is atomic);
+   device codes in the store (one-time use is a single `DELETE..RETURNING`); first-user lock
+   (`pg_advisory_lock`, also covering the previously unlocked OIDC first-login path);
+   per-workspace job exclusion inside `ClaimNextJob` in all four stores. Found and fixed along
+   the way: SIGTERM never stopped the server (the listener outlived the cancelled context).
 5. Chart: `server.replicas`, headless Service, PodDisruptionBudget, internal NetworkPolicy, refusal with
    the in-memory store, readiness/draining.
 6. Live test on two replicas: kill one during a terminal session and a running command; rolling restart

@@ -14,9 +14,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/gorilla/websocket"
 	"github.com/igloo-dev/igloo/internal/api"
 	"github.com/igloo-dev/igloo/internal/auth"
 	"github.com/igloo-dev/igloo/internal/models"
+
 	"github.com/igloo-dev/igloo/internal/relay"
 	"github.com/igloo-dev/igloo/internal/store"
 	"github.com/igloo-dev/igloo/internal/tailnet"
@@ -279,6 +281,10 @@ func (s *Server) StartHA(ctx context.Context) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/internal/relay/", s.handler.Relay.InternalHandler())
+	// A tailnet client piped over from a peer replica is served as a local client.
+	mux.Handle("/internal/tailnet/", s.handler.Relay.InternalStreamHandler(func(id string, ws *websocket.Conn) {
+		s.handler.Coordinator.ServeClient(id, ws)
+	}))
 	go func() {
 		log.Printf("[ha] replica %s serving peers on :%s (advertised %s)", replicaID, port, addr)
 		if err := http.ListenAndServe(":"+port, mux); err != nil {

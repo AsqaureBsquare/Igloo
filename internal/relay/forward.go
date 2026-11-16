@@ -8,6 +8,7 @@ package relay
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"log"
 	"net/http"
 	"path"
@@ -73,9 +74,12 @@ func (r *Relay) renewLoop(ctx context.Context, c *Cluster) {
 			return
 		case <-t.C:
 			r.mu.RLock()
-			ids := make([]string, 0, len(r.agents))
+			ids := make([]string, 0, len(r.agents)+len(r.streams))
 			for id := range r.agents {
 				ids = append(ids, id)
+			}
+			for key := range r.streams { // subsystem connections lease the same way
+				ids = append(ids, key)
 			}
 			r.mu.RUnlock()
 			until := time.Now().Add(c.Lease)
@@ -210,10 +214,17 @@ func (r *Relay) dialLock(workspaceID string) *sync.Mutex {
 	return m
 }
 
-// InternalHandler serves replica-to-replica streams at .../{workspaceID}. Mount it on
-// the internal listener only — it must never be reachable through the ingress, and a
-// NetworkPolicy should allow only server pods to reach its port.
+// InternalHandler serves replica-to-replica relay streams at .../{workspaceID}. Mount
+// it on the internal listener only — it must never be reachable through the ingress,
+// and a NetworkPolicy should allow only server pods to reach its port.
 func (r *Relay) InternalHandler() http.Handler {
+	return r.InternalStreamHandler(r.serveInternal)
+}
+
+// InternalStreamHandler authenticates a peer replica and hands it the upgraded
+// connection — the building block for every replica-to-replica stream (the relay's own,
+// and the tailnet's). Same exposure rules as InternalHandler.
+func (r *Relay) InternalStreamHandler(serve func(workspaceID string, ws *websocket.Conn)) http.Handler {
 	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		c := r.clusterConfig()
@@ -235,9 +246,79 @@ func (r *Relay) InternalHandler() http.Handler {
 		if err != nil {
 			return
 		}
-		r.serveInternal(workspaceID, ws)
+		serve(workspaceID, ws)
 	})
 }
+
+// ─── Named streams (subsystems that hold their own per-workspace connection) ──
+//
+// The tailnet's agent socket is a different connection from the relay's and can land on
+// a different replica, so its ownership is tracked separately: the same lease table,
+// with the subsystem's name as a prefix. ClaimStream/ReleaseStream bracket the agent's
+// connection; StreamOwner tells a replica where to forward a client.
+
+func streamKey(kind, workspaceID string) string { return kind + "/" + workspaceID }
+
+// ClaimStream records this replica as the holder of a subsystem's agent connection.
+func (r *Relay) ClaimStream(kind, workspaceID string) {
+	key := streamKey(kind, workspaceID)
+	r.mu.Lock()
+	if r.streams == nil {
+		r.streams = map[string]bool{}
+	}
+	r.streams[key] = true
+	r.mu.Unlock()
+	r.claimOwnership(key)
+}
+
+// ReleaseStream drops the claim. Like the relay's own teardown, callers invoke it only
+// when their connection was still the live one.
+func (r *Relay) ReleaseStream(kind, workspaceID string) {
+	key := streamKey(kind, workspaceID)
+	r.mu.Lock()
+	delete(r.streams, key)
+	r.mu.Unlock()
+	c := r.clusterConfig()
+	if c == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	if err := c.Owners.DeleteAgentOwner(ctx, key, c.ReplicaID); err != nil {
+		log.Printf("[relay] release stream %s: %v", key, err)
+	}
+}
+
+// StreamOwner reports where a subsystem's agent connection lives. ok is false when
+// there is no cluster or no live owner; self is true when it is this replica.
+func (r *Relay) StreamOwner(kind, workspaceID string) (podAddr string, self bool, ok bool) {
+	c := r.clusterConfig()
+	if c == nil {
+		return "", false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), storeTimeout)
+	defer cancel()
+	o, err := c.Owners.GetAgentOwner(ctx, streamKey(kind, workspaceID))
+	if err != nil || o == nil {
+		return "", false, false
+	}
+	return o.PodAddr, o.ReplicaID == c.ReplicaID, true
+}
+
+// DialPeer opens an authenticated WebSocket to a peer replica's internal listener.
+// internalPath is e.g. "/internal/tailnet/<workspaceID>".
+func (r *Relay) DialPeer(podAddr, internalPath string) (*websocket.Conn, error) {
+	c := r.clusterConfig()
+	if c == nil {
+		return nil, errNotClustered
+	}
+	d := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
+	hdr := http.Header{"Authorization": []string{"Bearer " + c.Key}}
+	ws, _, err := d.Dial("ws://"+podAddr+internalPath, hdr)
+	return ws, err
+}
+
+var errNotClustered = errors.New("not clustered")
 
 // serveInternal joins a peer replica's stream to this relay: everything the local agent
 // sends goes to the peer (which applies the browser filter on its own side), and

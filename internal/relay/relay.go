@@ -75,6 +75,7 @@ type Relay struct {
 	subs     map[string]map[string]chan []byte // workspaceID → subID → channel (server-side listeners)
 	remotes  map[string]*conn                  // workspaceID → link to the replica that owns the agent
 	peers    map[string]map[string]*conn       // workspaceID → streams served to peer replicas
+	streams  map[string]bool                   // kind/workspaceID → subsystem connections held here (ClaimStream)
 	cluster  *Cluster                          // nil when running as a single replica
 
 	dialMu sync.Mutex

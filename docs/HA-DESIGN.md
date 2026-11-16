@@ -11,8 +11,11 @@ NetworkPolicy) and refuses non-Postgres stores at template time. Phase 6 so far,
 a k3s cluster with 2 replicas: killing the replica that owned a running workspace's
 agent — the agent reconnected to the survivor and took the ownership row in under 5
 seconds, before the replacement pod was even ready. Still to run: kill mid-terminal and
-mid-build, and a rolling restart during a full e2e. Phases 2 and 3 remain design. A
-single replica renders and behaves exactly as before.
+mid-build, and a rolling restart during a full e2e. Phase 3 is built: the tailnet socket
+leases its own ownership row ("tailnet/" prefix in the same table) and a client landing
+on the wrong replica is piped whole to the owner. Phase 2's substance (terminals and
+port-forward cross replicas) shipped with phase 1, since both ride the relay. A single
+replica renders and behaves exactly as before.
 
 ## Why
 
@@ -83,7 +86,8 @@ Details for option 3:
    from the shared JWT secret. Terminals already work across replicas (they ride the same relay);
    their dedicated phase-2 concerns are reconnect behaviour and port-forward edge cases.
 2. Terminals (browser WebSocket) and port-forward through the owner.
-3. Tailnet coordinator through the owner.
+3. **Done.** Tailnet coordinator through the owner: own lease row, whole-stream pipe over the
+   internal listener, key exchange and packets proven to cross both ways.
 4. **Done.** Build logs persist (`provision_logs`, trimmed to the last 500 per workspace); a
    subscriber tails the store by sequence number (700ms poll — no LISTEN/NOTIFY needed), so the
    SSE stream works on any replica. Job dispatch sweep (3s, every replica; the claim is atomic);

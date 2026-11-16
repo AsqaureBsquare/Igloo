@@ -452,10 +452,17 @@ func (s *MongoStore) GetJob(ctx context.Context, id string) (*models.ProvisionJo
 }
 
 func (s *MongoStore) ClaimNextJob(ctx context.Context, provisionerID string) (*models.ProvisionJob, error) {
+	// One job at a time per workspace. Read-then-claim is not one atomic step here, so a
+	// tight race between two claimants can still let a second job through — best effort;
+	// Postgres (the store that supports multiple replicas) closes the window completely.
+	running, err := s.jobs.Distinct(ctx, "workspace_id", bson.M{"status": "running"})
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	var d mJobDoc
-	err := s.jobs.FindOneAndUpdate(ctx,
-		bson.M{"status": "pending"},
+	err = s.jobs.FindOneAndUpdate(ctx,
+		bson.M{"status": "pending", "workspace_id": bson.M{"$nin": running}},
 		bson.M{"$set": bson.M{
 			"status":         "running",
 			"provisioner_id": provisionerID,

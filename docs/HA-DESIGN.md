@@ -1,6 +1,21 @@
 # Running more than one server replica
 
-Status: design, not built. Nothing here changes behaviour until it is implemented.
+Status: phases 1, 4 and 5 built; phase 6 partly run. Phase 1: owner lease + relay
+forwarding for exec/files/HTTP, behind `IGLOO_INTERNAL_ADDR`; concurrent-start migration
+deadlock fixed with an advisory lock. Phase 4: device-login codes in the store,
+first-admin decided under a store-wide lock (including the OIDC path),
+one-job-per-workspace enforced in the claim, 3s dispatch sweep, build logs persisted and
+tailed by sequence number, and SIGTERM actually stops the process. Phase 5:
+`server.replicas` wires everything (downward-API pod address, PDB, internal-port
+NetworkPolicy) and refuses non-Postgres stores at template time. Phase 6 so far, live on
+a k3s cluster with 2 replicas: killing the replica that owned a running workspace's
+agent — the agent reconnected to the survivor and took the ownership row in under 5
+seconds, before the replacement pod was even ready. Still to run: kill mid-terminal and
+mid-build, and a rolling restart during a full e2e. Phase 3 is built: the tailnet socket
+leases its own ownership row ("tailnet/" prefix in the same table) and a client landing
+on the wrong replica is piped whole to the owner. Phase 2's substance (terminals and
+port-forward cross replicas) shipped with phase 1, since both ride the relay. A single
+replica renders and behaves exactly as before.
 
 ## Why
 
@@ -19,7 +34,7 @@ fixes the downtime only if each request can be served by either replica.
 | CLI device-login codes | `deviceCodes` map | `igloo login` starts on A and polls B: "invalid code". | Table with expiry; one-time use becomes `DELETE ... RETURNING` |
 | "First registered user is admin" lock | `regMu` | Two replicas can each create a first admin. | Decide inside one transaction (advisory lock or `INSERT ... WHERE NOT EXISTS`) |
 | Login/password throttling counters | `ratelimit` | The limit is multiplied by the replica count. | Counter table with a time window (acceptable to ship later; it degrades the limit, it does not break anything) |
-| Network snapshot per workspace | `NetMapStore` | The Network tab shows nothing when it hits the other replica. | Ask the owner replica (same path as the relay), or store the latest snapshot |
+| Network snapshot per workspace | `NetMapStore` | The Network tab shows nothing when it hits the other replica. | **Done:** the latest snapshot persists (coalesced 1s flusher); a replica that has not heard from the agent answers from the store |
 | One job at a time per workspace | `inFlight` in worker and daemon | Two jobs for one workspace can run on two processes. | Make `ClaimNextJob` skip workspaces that already have a running job |
 | The in-memory store (`--local`) | `store.Memory` | Each replica would have its own database. | Refuse `replicas > 1` with the in-memory store (chart check and server start-up check) |
 
@@ -63,11 +78,23 @@ Details for option 3:
 
 ## Phases
 
-1. Owner table and lease, relay forwarding for exec/files/HTTP (`Subscribe`/`SendToAgent`), tests with
-   two in-process relays. This is the part everything else depends on.
+1. **Done.** Owner table and lease, relay forwarding for exec/files/HTTP (`Subscribe`/`SendToAgent`),
+   tests with two in-process relays — plus a live check with two real server processes on one
+   Postgres. Enabled per replica by `IGLOO_INTERNAL_ADDR` (the pod address peers dial, e.g.
+   `$(POD_IP):8081` from the downward API); `IGLOO_INTERNAL_PORT` (default 8081) is the internal
+   listener, `IGLOO_REPLICA_ID` defaults to the hostname, and peers authenticate with a key derived
+   from the shared JWT secret. Terminals already work across replicas (they ride the same relay);
+   their dedicated phase-2 concerns are reconnect behaviour and port-forward edge cases.
 2. Terminals (browser WebSocket) and port-forward through the owner.
-3. Tailnet coordinator through the owner.
-4. Job dispatch sweep; log buffer; device codes; first-user lock; per-workspace job exclusion.
+3. **Done.** Tailnet coordinator through the owner: own lease row, whole-stream pipe over the
+   internal listener, key exchange and packets proven to cross both ways.
+4. **Done.** Build logs persist (`provision_logs`, trimmed to the last 500 per workspace); a
+   subscriber tails the store by sequence number (700ms poll — no LISTEN/NOTIFY needed), so the
+   SSE stream works on any replica. Job dispatch sweep (3s, every replica; the claim is atomic);
+   device codes in the store (one-time use is a single `DELETE..RETURNING`); first-user lock
+   (`pg_advisory_lock`, also covering the previously unlocked OIDC first-login path);
+   per-workspace job exclusion inside `ClaimNextJob` in all four stores. Found and fixed along
+   the way: SIGTERM never stopped the server (the listener outlived the cancelled context).
 5. Chart: `server.replicas`, headless Service, PodDisruptionBudget, internal NetworkPolicy, refusal with
    the in-memory store, readiness/draining.
 6. Live test on two replicas: kill one during a terminal session and a running command; rolling restart

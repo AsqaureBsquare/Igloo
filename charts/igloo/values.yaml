@@ -17,6 +17,10 @@ server:
     tag: latest
     pullPolicy: Always
 
+  # More than 1 keeps Igloo up through deploys and node loss. Needs PostgreSQL (the
+  # bundled one or database.postgresURL); the replicas share agent ownership, device
+  # logins and build logs through it and forward to each other over an internal port
+  # that never goes through the ingress. 2 is the useful number.
   replicas: 1
   port: 8080
 

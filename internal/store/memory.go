@@ -33,6 +33,22 @@ type MemoryStore struct {
 	teams          map[string]*models.Team            // id → team
 	teamMembers    map[string]*models.TeamMember      // teamID+userID → member
 	guardEvents    map[string][]models.GuardEvent     // workspaceID → events, oldest first
+	agentOwners    map[string]*models.AgentOwner      // workspaceID → owning replica lease
+	deviceCodes    map[string]*deviceCode             // CLI login code → state
+	regLock        sync.Mutex                         // serialises first-user registration
+	provLogs       map[string][]models.ProvisionLogLine // workspaceID → lines, oldest first
+	provLogSeq     int64                              // global, so seqs order across workspaces too
+	netSnapshots   map[string]*netSnapshot            // workspaceID → latest network snapshot
+}
+
+type netSnapshot struct {
+	connections []byte
+	updatedAt   time.Time
+}
+
+type deviceCode struct {
+	token     string
+	expiresAt time.Time
 }
 
 func NewMemory() *MemoryStore {
@@ -52,7 +68,175 @@ func NewMemory() *MemoryStore {
 		teams:       make(map[string]*models.Team),
 		teamMembers: make(map[string]*models.TeamMember),
 		guardEvents: make(map[string][]models.GuardEvent),
+		agentOwners: make(map[string]*models.AgentOwner),
+		deviceCodes: make(map[string]*deviceCode),
+		provLogs:    make(map[string][]models.ProvisionLogLine),
+		netSnapshots: make(map[string]*netSnapshot),
 	}
+}
+
+// ─── Network snapshots ───────────────────────────────────────────────────────
+
+func (s *MemoryStore) SaveNetSnapshot(_ context.Context, workspaceID string, connections []byte, updatedAt time.Time) error {
+	cp := append([]byte(nil), connections...)
+	s.mu.Lock()
+	s.netSnapshots[workspaceID] = &netSnapshot{connections: cp, updatedAt: updatedAt}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *MemoryStore) GetNetSnapshot(_ context.Context, workspaceID string) ([]byte, time.Time, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	snap := s.netSnapshots[workspaceID]
+	if snap == nil {
+		return nil, time.Time{}, ErrNotFound
+	}
+	return append([]byte(nil), snap.connections...), snap.updatedAt, nil
+}
+
+func (s *MemoryStore) DeleteNetSnapshot(_ context.Context, workspaceID string) error {
+	s.mu.Lock()
+	delete(s.netSnapshots, workspaceID)
+	s.mu.Unlock()
+	return nil
+}
+
+// ─── Provision logs ──────────────────────────────────────────────────────────
+
+// maxProvisionLogLines bounds how much build output one workspace keeps.
+const maxProvisionLogLines = 500
+
+func (s *MemoryStore) AppendProvisionLog(_ context.Context, workspaceID, line string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.provLogSeq++
+	lines := append(s.provLogs[workspaceID], models.ProvisionLogLine{Seq: s.provLogSeq, Line: line})
+	if len(lines) > maxProvisionLogLines {
+		lines = lines[len(lines)-maxProvisionLogLines:]
+	}
+	s.provLogs[workspaceID] = lines
+	return s.provLogSeq, nil
+}
+
+func (s *MemoryStore) ListProvisionLogs(_ context.Context, workspaceID string, afterSeq int64) ([]models.ProvisionLogLine, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []models.ProvisionLogLine
+	for _, l := range s.provLogs[workspaceID] {
+		if l.Seq > afterSeq {
+			out = append(out, l)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStore) DeleteProvisionLogs(_ context.Context, workspaceID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.provLogs, workspaceID)
+	return nil
+}
+
+// ─── Device-login codes ──────────────────────────────────────────────────────
+
+func (s *MemoryStore) CreateDeviceCode(_ context.Context, code string, expiresAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c, e := range s.deviceCodes { // lazy expiry
+		if time.Now().After(e.expiresAt) {
+			delete(s.deviceCodes, c)
+		}
+	}
+	if e, ok := s.deviceCodes[code]; ok && time.Now().Before(e.expiresAt) {
+		return ErrConflict
+	}
+	s.deviceCodes[code] = &deviceCode{expiresAt: expiresAt}
+	return nil
+}
+
+func (s *MemoryStore) ApproveDeviceCode(_ context.Context, code, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.deviceCodes[code]
+	if !ok || time.Now().After(e.expiresAt) {
+		return ErrNotFound
+	}
+	e.token = token
+	return nil
+}
+
+func (s *MemoryStore) TakeDeviceCode(_ context.Context, code string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.deviceCodes[code]
+	if !ok || time.Now().After(e.expiresAt) {
+		return "", ErrNotFound
+	}
+	if e.token == "" {
+		return "", nil
+	}
+	delete(s.deviceCodes, code) // one-time use
+	return e.token, nil
+}
+
+func (s *MemoryStore) CountDeviceCodes(_ context.Context) (int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	n := 0
+	for _, e := range s.deviceCodes {
+		if time.Now().Before(e.expiresAt) {
+			n++
+		}
+	}
+	return n, nil
+}
+
+// WithRegistrationLock serialises first-user registration. In-memory the store lives in
+// one process, so a plain mutex is the whole story.
+func (s *MemoryStore) WithRegistrationLock(_ context.Context, fn func() error) error {
+	s.regLock.Lock()
+	defer s.regLock.Unlock()
+	return fn()
+}
+
+// ─── Agent ownership (multi-replica relay) ───────────────────────────────────
+
+func (s *MemoryStore) UpsertAgentOwner(_ context.Context, o *models.AgentOwner) error {
+	cp := *o
+	s.mu.Lock()
+	s.agentOwners[o.WorkspaceID] = &cp
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *MemoryStore) GetAgentOwner(_ context.Context, workspaceID string) (*models.AgentOwner, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	o := s.agentOwners[workspaceID]
+	if o == nil || !o.LeaseUntil.After(time.Now()) {
+		return nil, nil
+	}
+	cp := *o
+	return &cp, nil
+}
+
+func (s *MemoryStore) RenewAgentOwner(_ context.Context, workspaceID, replicaID string, leaseUntil time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if o := s.agentOwners[workspaceID]; o != nil && o.ReplicaID == replicaID {
+		o.LeaseUntil = leaseUntil
+	}
+	return nil
+}
+
+func (s *MemoryStore) DeleteAgentOwner(_ context.Context, workspaceID, replicaID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if o := s.agentOwners[workspaceID]; o != nil && o.ReplicaID == replicaID {
+		delete(s.agentOwners, workspaceID)
+	}
+	return nil
 }
 
 // ─── APITokens ────────────────────────────────────────────────────────────────
@@ -321,9 +505,17 @@ func (s *MemoryStore) GetJob(_ context.Context, id string) (*models.ProvisionJob
 func (s *MemoryStore) ClaimNextJob(_ context.Context, provisionerID string) (*models.ProvisionJob, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// One job at a time per workspace: a pending job whose workspace already has a
+	// running job stays queued, or two processes could run Terraform on one state.
+	running := map[string]bool{}
+	for _, j := range s.jobs {
+		if j.Status == models.JobRunning {
+			running[j.WorkspaceID] = true
+		}
+	}
 	var oldest *models.ProvisionJob
 	for _, j := range s.jobs {
-		if j.Status != models.JobPending {
+		if j.Status != models.JobPending || running[j.WorkspaceID] {
 			continue
 		}
 		if oldest == nil || j.CreatedAt.Before(oldest.CreatedAt) {

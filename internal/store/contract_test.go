@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +27,7 @@ func stores(t *testing.T) map[string]func(t *testing.T) Store {
 			}
 			// Isolate each test: start from empty tables.
 			if _, err := s.db.Exec(context.Background(),
-				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events RESTART IDENTITY CASCADE`); err != nil {
+				`TRUNCATE users, workspaces, templates, jobs, api_tokens, guard_events, agent_owners, device_codes, provision_logs, net_snapshots RESTART IDENTITY CASCADE`); err != nil {
 				t.Fatalf("truncate: %v", err)
 			}
 			t.Cleanup(s.db.Close)
@@ -175,10 +176,12 @@ func TestJobsClaimOrderAndExclusivity(t *testing.T) {
 		if j, err := s.ClaimNextJob(ctx, "p"); j != nil || err != nil {
 			t.Fatalf("empty queue: got %+v, %v; want nil, nil", j, err)
 		}
+		// Distinct workspaces: jobs sharing one workspace are serialised by design
+		// (TestClaimSkipsWorkspacesWithARunningJob) and would hide the race this checks.
 		base := time.Now().Add(-time.Hour)
 		for i, id := range []string{"j-old", "j-mid", "j-new"} {
 			err := s.CreateJob(ctx, &models.ProvisionJob{
-				ID: id, WorkspaceID: "w", Action: models.JobStart, Status: models.JobPending,
+				ID: id, WorkspaceID: "w-" + id, Action: models.JobStart, Status: models.JobPending,
 				CreatedAt: base.Add(time.Duration(i) * time.Minute), UpdatedAt: base,
 			})
 			if err != nil {
@@ -323,6 +326,264 @@ func TestGuardEvents(t *testing.T) {
 		}
 		if none, _ := g.ListGuardEvents(ctx, "nobody", 10); len(none) != 0 {
 			t.Errorf("unknown workspace has %d events", len(none))
+		}
+	})
+}
+
+// The agent-owner lease is what lets a second server replica find the agent. The rules:
+// the most recent connection wins, a stale replica can neither renew nor delete a row
+// it lost, and an unrenewed lease lapses on its own.
+func TestAgentOwnerLease(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		os, ok := s.(AgentOwnerStore)
+		if !ok {
+			t.Skipf("%T does not support agent ownership", s)
+		}
+		ctx := context.Background()
+
+		if o, err := os.GetAgentOwner(ctx, "w1"); err != nil || o != nil {
+			t.Fatalf("empty store: owner=%v err=%v, want nil, nil", o, err)
+		}
+
+		live := time.Now().Add(5 * time.Second)
+		if err := os.UpsertAgentOwner(ctx, &models.AgentOwner{WorkspaceID: "w1", ReplicaID: "a", PodAddr: "10.0.0.1:8081", LeaseUntil: live}); err != nil {
+			t.Fatal(err)
+		}
+		o, err := os.GetAgentOwner(ctx, "w1")
+		if err != nil || o == nil || o.ReplicaID != "a" || o.PodAddr != "10.0.0.1:8081" {
+			t.Fatalf("after claim: owner=%+v err=%v", o, err)
+		}
+
+		// The agent reconnected to b: b's claim overwrites a's unexpired lease.
+		if err := os.UpsertAgentOwner(ctx, &models.AgentOwner{WorkspaceID: "w1", ReplicaID: "b", PodAddr: "10.0.0.2:8081", LeaseUntil: live}); err != nil {
+			t.Fatal(err)
+		}
+		// a, with its stale half-dead connection, can neither renew nor delete the row back.
+		if err := os.RenewAgentOwner(ctx, "w1", "a", time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.DeleteAgentOwner(ctx, "w1", "a"); err != nil {
+			t.Fatal(err)
+		}
+		if o, _ := os.GetAgentOwner(ctx, "w1"); o == nil || o.ReplicaID != "b" {
+			t.Fatalf("the stale replica took the workspace back: owner=%+v", o)
+		}
+
+		// The owner itself may delete its row (clean disconnect).
+		if err := os.DeleteAgentOwner(ctx, "w1", "b"); err != nil {
+			t.Fatal(err)
+		}
+		if o, _ := os.GetAgentOwner(ctx, "w1"); o != nil {
+			t.Fatalf("row survived the owner's delete: %+v", o)
+		}
+
+		// An expired lease is the same as no owner.
+		if err := os.UpsertAgentOwner(ctx, &models.AgentOwner{WorkspaceID: "w1", ReplicaID: "a", PodAddr: "x", LeaseUntil: time.Now().Add(-time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+		if o, _ := os.GetAgentOwner(ctx, "w1"); o != nil {
+			t.Fatalf("a lapsed lease still answered: %+v", o)
+		}
+	})
+}
+
+// A pending job whose workspace already has a running job must stay queued — two
+// processes running Terraform on one workspace state corrupt it.
+func TestClaimSkipsWorkspacesWithARunningJob(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		ctx := context.Background()
+		mk := func(id, ws string, age time.Duration) {
+			if err := s.CreateJob(ctx, &models.ProvisionJob{
+				ID: id, WorkspaceID: ws, Action: "create", Status: models.JobPending,
+				CreatedAt: time.Now().Add(-age), UpdatedAt: time.Now(),
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		mk("j1", "w1", 3*time.Minute) // oldest
+		mk("j2", "w1", 2*time.Minute) // same workspace — must wait for j1
+		mk("j3", "w2", 1*time.Minute)
+
+		j, err := s.ClaimNextJob(ctx, "p1")
+		if err != nil || j == nil || j.ID != "j1" {
+			t.Fatalf("first claim: %+v err=%v, want j1", j, err)
+		}
+		// j1 is running; the next claim must skip j2 and take w2's job.
+		j, err = s.ClaimNextJob(ctx, "p2")
+		if err != nil || j == nil || j.ID != "j3" {
+			t.Fatalf("second claim: %+v err=%v, want j3 (j2's workspace is busy)", j, err)
+		}
+		if j, _ := s.ClaimNextJob(ctx, "p3"); j != nil {
+			t.Fatalf("third claim got %s, want nothing (only j2 is left and its workspace is busy)", j.ID)
+		}
+
+		// j1 finishes; j2 becomes claimable.
+		done, _ := s.GetJob(ctx, "j1")
+		done.Status = models.JobDone
+		if err := s.UpdateJob(ctx, done); err != nil {
+			t.Fatal(err)
+		}
+		j, err = s.ClaimNextJob(ctx, "p4")
+		if err != nil || j == nil || j.ID != "j2" {
+			t.Fatalf("after j1 finished: %+v err=%v, want j2", j, err)
+		}
+	})
+}
+
+// CLI device-login codes live in the store so the flow survives landing on different
+// replicas. One-time use and expiry are the security properties.
+func TestDeviceCodes(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		dcs, ok := s.(DeviceCodeStore)
+		if !ok {
+			t.Skipf("%T does not hold device codes", s)
+		}
+		ctx := context.Background()
+		exp := time.Now().Add(time.Minute)
+
+		if _, err := dcs.TakeDeviceCode(ctx, "nope"); err != ErrNotFound {
+			t.Fatalf("unknown code: err=%v, want ErrNotFound", err)
+		}
+		if err := dcs.CreateDeviceCode(ctx, "c1", exp); err != nil {
+			t.Fatal(err)
+		}
+		if err := dcs.CreateDeviceCode(ctx, "c1", exp); err != ErrConflict {
+			t.Fatalf("duplicate code: err=%v, want ErrConflict", err)
+		}
+		if tok, err := dcs.TakeDeviceCode(ctx, "c1"); err != nil || tok != "" {
+			t.Fatalf("pending code: tok=%q err=%v, want empty and nil", tok, err)
+		}
+		if err := dcs.ApproveDeviceCode(ctx, "c1", "tok-123"); err != nil {
+			t.Fatal(err)
+		}
+		if tok, err := dcs.TakeDeviceCode(ctx, "c1"); err != nil || tok != "tok-123" {
+			t.Fatalf("approved code: tok=%q err=%v", tok, err)
+		}
+		if _, err := dcs.TakeDeviceCode(ctx, "c1"); err != ErrNotFound {
+			t.Fatalf("second take: err=%v, want ErrNotFound (one-time use)", err)
+		}
+
+		// Expired codes answer nothing and don't count.
+		if err := dcs.CreateDeviceCode(ctx, "old", time.Now().Add(-time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := dcs.ApproveDeviceCode(ctx, "old", "x"); err != ErrNotFound {
+			t.Fatalf("approving an expired code: err=%v, want ErrNotFound", err)
+		}
+		if _, err := dcs.TakeDeviceCode(ctx, "old"); err != ErrNotFound {
+			t.Fatalf("taking an expired code: err=%v, want ErrNotFound", err)
+		}
+		dcs.CreateDeviceCode(ctx, "live", exp)
+		if n, err := dcs.CountDeviceCodes(ctx); err != nil || n != 1 {
+			t.Fatalf("count=%d err=%v, want 1 (expired codes don't count)", n, err)
+		}
+	})
+}
+
+// The registration lock must actually exclude: what runs inside never overlaps.
+func TestRegistrationLockExcludes(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		rl, ok := s.(RegistrationLocker)
+		if !ok {
+			t.Skipf("%T has no registration lock", s)
+		}
+		ctx := context.Background()
+		var inside, overlaps int32
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				rl.WithRegistrationLock(ctx, func() error {
+					if n := atomic.AddInt32(&inside, 1); n > 1 {
+						atomic.AddInt32(&overlaps, 1)
+					}
+					time.Sleep(5 * time.Millisecond)
+					atomic.AddInt32(&inside, -1)
+					return nil
+				})
+			}()
+		}
+		wg.Wait()
+		if overlaps != 0 {
+			t.Fatalf("%d goroutines were inside the lock at once", overlaps)
+		}
+	})
+}
+
+// Build-log lines persist with ordered sequence numbers so any replica can serve the
+// stream: tail with "after seq N" and nothing duplicates or goes missing.
+func TestProvisionLogs(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		pls, ok := s.(ProvisionLogStore)
+		if !ok {
+			t.Skipf("%T does not keep provision logs", s)
+		}
+		ctx := context.Background()
+
+		var seqs []int64
+		for _, line := range []string{"one", "two", "three"} {
+			seq, err := pls.AppendProvisionLog(ctx, "w1", line)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seqs = append(seqs, seq)
+		}
+		pls.AppendProvisionLog(ctx, "w2", "other workspace")
+
+		all, err := pls.ListProvisionLogs(ctx, "w1", 0)
+		if err != nil || len(all) != 3 || all[0].Line != "one" || all[2].Line != "three" {
+			t.Fatalf("all lines = %+v err=%v", all, err)
+		}
+		if !(all[0].Seq < all[1].Seq && all[1].Seq < all[2].Seq) {
+			t.Fatalf("sequence numbers not increasing: %+v", all)
+		}
+		tail, err := pls.ListProvisionLogs(ctx, "w1", seqs[0])
+		if err != nil || len(tail) != 2 || tail[0].Line != "two" {
+			t.Fatalf("tail after first = %+v err=%v", tail, err)
+		}
+		if err := pls.DeleteProvisionLogs(ctx, "w1"); err != nil {
+			t.Fatal(err)
+		}
+		if left, _ := pls.ListProvisionLogs(ctx, "w1", 0); len(left) != 0 {
+			t.Fatalf("lines survived delete: %+v", left)
+		}
+		if other, _ := pls.ListProvisionLogs(ctx, "w2", 0); len(other) != 1 {
+			t.Fatalf("w2's lines were deleted with w1's: %+v", other)
+		}
+	})
+}
+
+// The latest network snapshot persists so any replica can serve the Network tab.
+func TestNetSnapshots(t *testing.T) {
+	forEachStore(t, func(t *testing.T, s Store) {
+		nss, ok := s.(NetSnapshotStore)
+		if !ok {
+			t.Skipf("%T does not keep network snapshots", s)
+		}
+		ctx := context.Background()
+
+		if _, _, err := nss.GetNetSnapshot(ctx, "w1"); err != ErrNotFound {
+			t.Fatalf("missing snapshot: err=%v, want ErrNotFound", err)
+		}
+		at := time.Now().Truncate(time.Millisecond)
+		if err := nss.SaveNetSnapshot(ctx, "w1", []byte(`[{"state":"ESTABLISHED"}]`), at); err != nil {
+			t.Fatal(err)
+		}
+		// Latest wins.
+		at2 := at.Add(time.Second)
+		if err := nss.SaveNetSnapshot(ctx, "w1", []byte(`[]`), at2); err != nil {
+			t.Fatal(err)
+		}
+		raw, got, err := nss.GetNetSnapshot(ctx, "w1")
+		if err != nil || string(raw) != `[]` || !got.Equal(at2) {
+			t.Fatalf("raw=%s at=%v err=%v, want the second save", raw, got, err)
+		}
+		if err := nss.DeleteNetSnapshot(ctx, "w1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := nss.GetNetSnapshot(ctx, "w1"); err != ErrNotFound {
+			t.Fatalf("snapshot survived delete: err=%v", err)
 		}
 	})
 }

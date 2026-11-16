@@ -16,6 +16,7 @@ Teams adopting AI agents hit the same two questions: *what can this thing reach?
 - **Credentials the workload never sees.** Declare a route (`llm → api.example.com, header Authorization, secret LLM_KEY`); the workspace calls the gateway with a scoped token and the gateway injects the real key. Keys never enter the container, its env, or your database.
 - **A record of everything.** Every allowed and refused connection is an audit event you can read per workspace, in the UI or the API.
 - **Self-hosted, one Helm install.** Single Go binary, bundled Postgres or your own, no SaaS, no per-seat pricing. Your cluster, your data, your policies.
+- **Stays up through deploys.** Set `server.replicas: 2` and the control plane survives pod loss and rolling upgrades: replicas share state through Postgres and forward to whichever one holds a workspace's agent — failover in seconds, included in the product, not behind an enterprise license.
 - **Humans too.** The same workspaces serve developers: VS Code and terminal in the browser, SSH, auto-sleep when idle (~$0 compute), ~15s wake with disk intact.
 
 How this compares: cloud sandbox services (E2B, Daytona, Modal) run your agents on *their* infrastructure; dev-workspace platforms (Coder) manage workspaces but have no egress gateway, credential broker, or network audit; LLM proxies broker credentials but don't isolate the workload. Igloo packages all of it, self-hosted.
@@ -75,13 +76,11 @@ Agent / developer → igloo CLI, browser, or sandbox API
 The gateway needs a cluster that enforces NetworkPolicy (Cilium, Calico, GKE Dataplane V2, k3s, or the policy agents on EKS/AKS). `helm test igloo` proves yours does — run it.
 
 ```bash
-git clone https://github.com/AsqaureBsquare/Igloo
-cd Igloo
-
-helm install igloo charts/igloo \
+helm install igloo oci://ghcr.io/asquarebsquare/igloo --version 0.2.0 \
   --set server.jwtSecret=$(openssl rand -hex 32) \
   --set provisioner.key=$(openssl rand -hex 32) \
   --set guard.enabled=true \
+  --set server.replicas=2 \
   --set server.serverURL=https://igloo.yourdomain.com \
   --set server.ingress.enabled=true \
   --set server.ingress.className=nginx \
@@ -90,12 +89,15 @@ helm install igloo charts/igloo \
 helm test igloo   # proves the cluster actually enforces NetworkPolicy
 ```
 
+(Installing from a checkout instead: `git clone https://github.com/AsqaureBsquare/Igloo && cd Igloo`, then the same command with `charts/igloo` in place of the OCI reference.)
+
 Notes:
 
 - **Gateway secrets:** put upstream keys in a Kubernetes Secret and point `guard.existingSecret` at it — values never reach Igloo's database.
 - **Sandbox image:** sandboxes cannot install packages at start-up (no network), so give them an image that has what they need: `--set server.sandboxImage=ghcr.io/asqaurebsquare/igloo-workspace:latest`.
 - **No default StorageClass** (bare EKS, some bare-metal): set `postgresql.storageClass` and `provisioner.workspace.stateStorageClass`.
-- A published OCI chart exists (`oci://ghcr.io/asquarebsquare/igloo`) but currently lags this repository; install from source until the next chart release.
+- **High availability:** `--set server.replicas=2` keeps Igloo up through deploys and pod loss (needs the PostgreSQL store; the chart refuses otherwise). Replicas forward to each other over an internal port that never touches your ingress. Design and failure semantics: `docs/HA-DESIGN.md`.
+- Chart 0.2.0 is the first release with the egress gateway, sandboxes and HA; older published versions predate them.
 
 ### Organisation-wide baseline
 
@@ -129,6 +131,7 @@ HTTPS to an allowed host is allowed or refused **by name, not decrypted** — th
 | Deploy target | Single region | **Provisioners anywhere** |
 | Self-host | PostgreSQL + server + proxy | **Single binary** |
 | Connectivity | VPN / WireGuard | **Plain WebSocket (443)** |
+| High availability | Paid enterprise feature | **`server.replicas: 2`, included** |
 
 Sleep scales the deployment to zero (Kubernetes) or stops the Fargate task (ECS); the disk persists. Wake reschedules and remounts — no Terraform re-run.
 

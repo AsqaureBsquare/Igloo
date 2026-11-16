@@ -642,15 +642,18 @@ func (d *DynamoStore) GetJob(ctx context.Context, id string) (*models.ProvisionJ
 // conditional update for optimistic locking — safe under concurrent provisioners.
 func (d *DynamoStore) ClaimNextJob(ctx context.Context, provisionerID string) (*models.ProvisionJob, error) {
 	pendingAV, _ := attributevalue.Marshal("pending")
+	runningScanAV, _ := attributevalue.Marshal("running")
 	typAV, _ := attributevalue.Marshal("job")
 	var avItems []map[string]types.AttributeValue
 	var lastKey map[string]types.AttributeValue
 	for {
+		// Pending and running in one scan: a pending job whose workspace already has a
+		// running job must stay queued (one Terraform at a time per workspace).
 		res, err := d.client.Scan(ctx, &dynamodb.ScanInput{
 			TableName:                 &d.table,
-			FilterExpression:          aws.String("#t = :typ AND #s = :status"),
+			FilterExpression:          aws.String("#t = :typ AND (#s = :status OR #s = :running)"),
 			ExpressionAttributeNames:  map[string]string{"#t": "type", "#s": "status"},
-			ExpressionAttributeValues: map[string]types.AttributeValue{":typ": typAV, ":status": pendingAV},
+			ExpressionAttributeValues: map[string]types.AttributeValue{":typ": typAV, ":status": pendingAV, ":running": runningScanAV},
 			ExclusiveStartKey:         lastKey,
 		})
 		if err != nil {
@@ -666,10 +669,15 @@ func (d *DynamoStore) ClaimNextJob(ctx context.Context, provisionerID string) (*
 		return nil, nil
 	}
 
+	busy := map[string]bool{}
 	var jobs []ddbJob
 	for _, av := range avItems {
 		var j ddbJob
 		if err := attributevalue.UnmarshalMap(av, &j); err == nil {
+			if j.Status == "running" {
+				busy[j.WorkspaceID] = true
+				continue
+			}
 			jobs = append(jobs, j)
 		}
 	}
@@ -681,6 +689,9 @@ func (d *DynamoStore) ClaimNextJob(ctx context.Context, provisionerID string) (*
 	condPendingAV, _ := attributevalue.Marshal("pending")
 
 	for _, j := range jobs {
+		if busy[j.WorkspaceID] {
+			continue
+		}
 		pkAV, _ := attributevalue.Marshal(jobPK(j.ID))
 		skAV, _ := attributevalue.Marshal(jobPK(j.ID))
 		_, err := d.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{

@@ -114,6 +114,19 @@ func (c *Coordinator) nextIP() netip.Addr {
 	return netip.AddrFrom4([4]byte{100, 64, byte(hi), byte(lo)})
 }
 
+// HasAgent reports whether this coordinator holds the workspace's agent connection.
+func (c *Coordinator) HasAgent(wsID string) bool {
+	c.mu.Lock()
+	e := c.workspaces[wsID]
+	c.mu.Unlock()
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.agent != nil
+}
+
 // ServeAgent is called when a workspace agent connects via WebSocket.
 func (c *Coordinator) ServeAgent(wsID string, ws *websocket.Conn) {
 	entry := c.entry(wsID)

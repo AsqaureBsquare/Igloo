@@ -106,12 +106,15 @@ func (r *ProvisionerRegistry) HasWaiters() bool {
 	return len(r.waiters) > 0
 }
 
-// StartDispatchLoop runs a background goroutine that retries TryDispatch every 15 seconds.
-// This is the safety net for the race where a pending job exists in the DB when a
-// provisioner connects but ClaimNextJob transiently returns nil on the first attempt.
+// StartDispatchLoop runs a background goroutine that retries TryDispatch every few
+// seconds. It is the safety net for the race where a pending job exists in the DB when
+// a provisioner connects but ClaimNextJob transiently returns nil — and, with more than
+// one server replica, the delivery path for a job enqueued on a replica whose
+// provisioners are all parked elsewhere (TryImmediateDispatch only reaches local
+// waiters). The claim is atomic, so replicas sweeping concurrently cannot double-claim.
 func (r *ProvisionerRegistry) StartDispatchLoop(ctx context.Context, h *Handler) {
 	go func() {
-		t := time.NewTicker(15 * time.Second)
+		t := time.NewTicker(3 * time.Second)
 		defer t.Stop()
 		for {
 			select {

@@ -94,6 +94,68 @@ type Store interface {
 	SyncTeamMembers(ctx context.Context, teamID string, userIDs []string) error
 }
 
+// AgentOwnerStore is implemented by stores that can record which server replica holds
+// a workspace's agent connection. It is what lets more than one server replica run:
+// a replica that does not hold the agent looks up the owner and forwards to it.
+// A store without it supports a single replica only.
+type AgentOwnerStore interface {
+	// UpsertAgentOwner records the owner unconditionally — the agent just connected
+	// there, and the most recent connection wins.
+	UpsertAgentOwner(ctx context.Context, o *models.AgentOwner) error
+	// GetAgentOwner returns the owner holding a live lease, or nil, nil when there is none.
+	GetAgentOwner(ctx context.Context, workspaceID string) (*models.AgentOwner, error)
+	// RenewAgentOwner extends the lease only while replicaID still owns the row, so a
+	// replica with a stale connection cannot take a workspace back from the one the
+	// agent reconnected to.
+	RenewAgentOwner(ctx context.Context, workspaceID, replicaID string, leaseUntil time.Time) error
+	// DeleteAgentOwner removes the row only while replicaID still owns it.
+	DeleteAgentOwner(ctx context.Context, workspaceID, replicaID string) error
+}
+
+// DeviceCodeStore is implemented by stores that can hold CLI device-login codes, so the
+// login works when `igloo login` registers its code on one server replica and polls
+// another. A store without it keeps codes in the handler's memory (single replica only).
+type DeviceCodeStore interface {
+	// CreateDeviceCode registers a pending login. ErrConflict when the code is taken.
+	CreateDeviceCode(ctx context.Context, code string, expiresAt time.Time) error
+	// ApproveDeviceCode attaches the signed CLI token to a pending code.
+	// ErrNotFound when the code is unknown or expired.
+	ApproveDeviceCode(ctx context.Context, code, token string) error
+	// TakeDeviceCode returns the token and deletes the code in one step (one-time use),
+	// or "" while the code is still pending. ErrNotFound when unknown or expired.
+	TakeDeviceCode(ctx context.Context, code string) (string, error)
+	// CountDeviceCodes reports how many codes are pending (for the abuse cap).
+	CountDeviceCodes(ctx context.Context) (int, error)
+}
+
+// RegistrationLocker is implemented by stores that can serialise "the first registered
+// user becomes admin" across replicas. Without it the handler's local mutex still
+// protects a single replica.
+type RegistrationLocker interface {
+	WithRegistrationLock(ctx context.Context, fn func() error) error
+}
+
+// ProvisionLogStore is implemented by stores that can keep workspace build logs, so a
+// browser watching the log on one replica sees lines the provisioner reports to another.
+// A store without it buffers lines in the handler's memory (single replica only).
+type ProvisionLogStore interface {
+	// AppendProvisionLog stores one line and returns its sequence number.
+	AppendProvisionLog(ctx context.Context, workspaceID, line string) (int64, error)
+	// ListProvisionLogs returns the lines with Seq > afterSeq, oldest first.
+	ListProvisionLogs(ctx context.Context, workspaceID string, afterSeq int64) ([]models.ProvisionLogLine, error)
+	DeleteProvisionLogs(ctx context.Context, workspaceID string) error
+}
+
+// NetSnapshotStore is implemented by stores that can keep each workspace's latest
+// network snapshot, so the Network tab works on a replica other than the one the agent
+// reports to. Connections is the agent's connection list as JSON.
+type NetSnapshotStore interface {
+	SaveNetSnapshot(ctx context.Context, workspaceID string, connections []byte, updatedAt time.Time) error
+	// GetNetSnapshot returns ErrNotFound when the workspace has no snapshot.
+	GetNetSnapshot(ctx context.Context, workspaceID string) ([]byte, time.Time, error)
+	DeleteNetSnapshot(ctx context.Context, workspaceID string) error
+}
+
 // GuardEventStore is implemented by stores that can keep the egress gateway's audit
 // trail. It is separate from Store so a backend without it still works (activity is then
 // reported as unsupported).
@@ -106,3 +168,17 @@ type GuardEventStore interface {
 // MaxGuardEventsPerWorkspace bounds how much audit history one workspace keeps in the
 // in-memory store; the SQL store keeps history until it is pruned.
 const MaxGuardEventsPerWorkspace = 5000
+
+// The backends that can run more than one server replica.
+var (
+	_ AgentOwnerStore    = (*MemoryStore)(nil) // one process only — for tests and --local
+	_ AgentOwnerStore    = (*PostgresStore)(nil)
+	_ DeviceCodeStore    = (*MemoryStore)(nil)
+	_ DeviceCodeStore    = (*PostgresStore)(nil)
+	_ RegistrationLocker = (*MemoryStore)(nil)
+	_ RegistrationLocker = (*PostgresStore)(nil)
+	_ ProvisionLogStore  = (*MemoryStore)(nil)
+	_ ProvisionLogStore  = (*PostgresStore)(nil)
+	_ NetSnapshotStore   = (*MemoryStore)(nil)
+	_ NetSnapshotStore   = (*PostgresStore)(nil)
+)

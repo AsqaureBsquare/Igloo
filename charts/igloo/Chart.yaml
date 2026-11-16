@@ -2,8 +2,8 @@ apiVersion: v2
 name: igloo
 description: Igloo — self-hosted workspaces for AI agents and humans. Egress-guarded, credential-brokered, audited; idle workspaces sleep to $0 and wake in ~15s.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - devworkspace
   - remote-dev

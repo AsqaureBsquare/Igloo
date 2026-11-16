@@ -33,8 +33,20 @@ func NewPostgresStore(ctx context.Context, url string) (*PostgresStore, error) {
 }
 
 // migrate applies sqlSchema idempotently (every statement is IF NOT EXISTS, so new columns are ALTERs at the end).
+// Server replicas starting together would deadlock applying it concurrently (SQLSTATE
+// 40P01), so an advisory lock makes the second one wait for the first instead.
 func (s *PostgresStore) migrate(ctx context.Context) error {
-	_, err := s.db.Exec(ctx, sqlSchema)
+	conn, err := s.db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	const migrationLock = 0x69676c6f // "iglo" — any constant all replicas agree on
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, migrationLock); err != nil {
+		return err
+	}
+	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, migrationLock)
+	_, err = conn.Exec(ctx, sqlSchema)
 	return err
 }
 
@@ -220,9 +232,12 @@ func (s *PostgresStore) ClaimNextJob(ctx context.Context, provisionerID string) 
 	}
 	defer tx.Rollback(ctx)
 
+	// One job at a time per workspace: a pending job whose workspace already has a
+	// running job stays queued, or two provisioners could run Terraform on one state.
 	row := tx.QueryRow(ctx, `
 		SELECT id,workspace_id,action,status,provisioner_id,retry_count,created_at,updated_at,heartbeat,error
 		FROM jobs WHERE status='pending'
+		AND workspace_id NOT IN (SELECT workspace_id FROM jobs WHERE status='running')
 		ORDER BY created_at ASC
 		LIMIT 1 FOR UPDATE SKIP LOCKED`)
 	j, err := scanJob(row)
@@ -941,7 +956,202 @@ ALTER TABLE templates ADD COLUMN IF NOT EXISTS org_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE templates ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 0;
 ALTER TABLE templates ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS workspaces_org_id_idx ON workspaces(org_id);
+CREATE TABLE IF NOT EXISTS agent_owners (
+    workspace_id TEXT PRIMARY KEY,
+    replica_id   TEXT NOT NULL,
+    pod_addr     TEXT NOT NULL,
+    lease_until  TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS device_codes (
+    code       TEXT PRIMARY KEY,
+    token      TEXT NOT NULL DEFAULT '',
+    expires_at TIMESTAMPTZ NOT NULL
+);
+CREATE TABLE IF NOT EXISTS provision_logs (
+    id           BIGSERIAL PRIMARY KEY,
+    workspace_id TEXT NOT NULL,
+    line         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS provision_logs_ws_id_idx ON provision_logs(workspace_id, id);
+CREATE TABLE IF NOT EXISTS net_snapshots (
+    workspace_id TEXT PRIMARY KEY,
+    connections  JSONB NOT NULL,
+    updated_at   TIMESTAMPTZ NOT NULL
+);
 `
+
+// ─── Device-login codes ──────────────────────────────────────────────────────
+
+func (s *PostgresStore) CreateDeviceCode(ctx context.Context, code string, expiresAt time.Time) error {
+	// Login inits are rare; sweep expired codes here so the table stays small.
+	_, _ = s.db.Exec(ctx, `DELETE FROM device_codes WHERE expires_at < now()`)
+	_, err := s.db.Exec(ctx, `INSERT INTO device_codes (code, expires_at) VALUES ($1,$2)`, code, expiresAt)
+	if err != nil && isUniqueViolation(err) {
+		return ErrConflict
+	}
+	return err
+}
+
+func (s *PostgresStore) ApproveDeviceCode(ctx context.Context, code, token string) error {
+	tag, err := s.db.Exec(ctx, `UPDATE device_codes SET token=$2
+		WHERE code=$1 AND expires_at > now()`, code, token)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (s *PostgresStore) TakeDeviceCode(ctx context.Context, code string) (string, error) {
+	// One-time use: the delete and the read are one statement, so two concurrent polls
+	// cannot both walk away with the token.
+	var token string
+	err := s.db.QueryRow(ctx, `DELETE FROM device_codes
+		WHERE code=$1 AND expires_at > now() AND token <> '' RETURNING token`, code).Scan(&token)
+	if err == nil {
+		return token, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	var pending bool
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM device_codes
+		WHERE code=$1 AND expires_at > now())`, code).Scan(&pending); err != nil {
+		return "", err
+	}
+	if !pending {
+		return "", ErrNotFound
+	}
+	return "", nil
+}
+
+func (s *PostgresStore) CountDeviceCodes(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRow(ctx, `SELECT count(*) FROM device_codes WHERE expires_at > now()`).Scan(&n)
+	return n, err
+}
+
+// WithRegistrationLock holds a cluster-wide advisory lock while fn decides whether the
+// registering user is the first (and therefore the admin).
+func (s *PostgresStore) WithRegistrationLock(ctx context.Context, fn func() error) error {
+	conn, err := s.db.Acquire(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Release()
+	const registrationLock = 0x7265676c // "regl"
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, registrationLock); err != nil {
+		return err
+	}
+	defer conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, registrationLock)
+	return fn()
+}
+
+// ─── Provision logs ──────────────────────────────────────────────────────────
+
+func (s *PostgresStore) AppendProvisionLog(ctx context.Context, workspaceID, line string) (int64, error) {
+	var seq int64
+	err := s.db.QueryRow(ctx, `INSERT INTO provision_logs (workspace_id, line)
+		VALUES ($1,$2) RETURNING id`, workspaceID, line).Scan(&seq)
+	if err != nil {
+		return 0, err
+	}
+	// Trim occasionally rather than on every line — logs arrive in bursts.
+	if seq%64 == 0 {
+		_, _ = s.db.Exec(ctx, `DELETE FROM provision_logs WHERE workspace_id=$1 AND id NOT IN
+			(SELECT id FROM provision_logs WHERE workspace_id=$1 ORDER BY id DESC LIMIT 500)`, workspaceID)
+	}
+	return seq, nil
+}
+
+func (s *PostgresStore) ListProvisionLogs(ctx context.Context, workspaceID string, afterSeq int64) ([]models.ProvisionLogLine, error) {
+	rows, err := s.db.Query(ctx, `SELECT id, line FROM provision_logs
+		WHERE workspace_id=$1 AND id > $2 ORDER BY id ASC LIMIT 1000`, workspaceID, afterSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.ProvisionLogLine
+	for rows.Next() {
+		var l models.ProvisionLogLine
+		if err := rows.Scan(&l.Seq, &l.Line); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) DeleteProvisionLogs(ctx context.Context, workspaceID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM provision_logs WHERE workspace_id=$1`, workspaceID)
+	return err
+}
+
+// ─── Network snapshots ───────────────────────────────────────────────────────
+
+func (s *PostgresStore) SaveNetSnapshot(ctx context.Context, workspaceID string, connections []byte, updatedAt time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO net_snapshots (workspace_id, connections, updated_at)
+		VALUES ($1,$2,$3)
+		ON CONFLICT (workspace_id) DO UPDATE SET connections=$2, updated_at=$3`,
+		workspaceID, connections, updatedAt)
+	return err
+}
+
+func (s *PostgresStore) GetNetSnapshot(ctx context.Context, workspaceID string) ([]byte, time.Time, error) {
+	var connections []byte
+	var updatedAt time.Time
+	err := s.db.QueryRow(ctx, `SELECT connections, updated_at FROM net_snapshots
+		WHERE workspace_id=$1`, workspaceID).Scan(&connections, &updatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, time.Time{}, ErrNotFound
+	}
+	return connections, updatedAt, err
+}
+
+func (s *PostgresStore) DeleteNetSnapshot(ctx context.Context, workspaceID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM net_snapshots WHERE workspace_id=$1`, workspaceID)
+	return err
+}
+
+// ─── Agent ownership (multi-replica relay) ───────────────────────────────────
+
+func (s *PostgresStore) UpsertAgentOwner(ctx context.Context, o *models.AgentOwner) error {
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO agent_owners (workspace_id, replica_id, pod_addr, lease_until)
+		VALUES ($1,$2,$3,$4)
+		ON CONFLICT (workspace_id) DO UPDATE
+		SET replica_id=$2, pod_addr=$3, lease_until=$4`,
+		o.WorkspaceID, o.ReplicaID, o.PodAddr, o.LeaseUntil)
+	return err
+}
+
+func (s *PostgresStore) GetAgentOwner(ctx context.Context, workspaceID string) (*models.AgentOwner, error) {
+	row := s.db.QueryRow(ctx, `SELECT workspace_id, replica_id, pod_addr, lease_until
+		FROM agent_owners WHERE workspace_id=$1 AND lease_until > now()`, workspaceID)
+	var o models.AgentOwner
+	if err := row.Scan(&o.WorkspaceID, &o.ReplicaID, &o.PodAddr, &o.LeaseUntil); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &o, nil
+}
+
+func (s *PostgresStore) RenewAgentOwner(ctx context.Context, workspaceID, replicaID string, leaseUntil time.Time) error {
+	_, err := s.db.Exec(ctx, `UPDATE agent_owners SET lease_until=$3
+		WHERE workspace_id=$1 AND replica_id=$2`, workspaceID, replicaID, leaseUntil)
+	return err
+}
+
+func (s *PostgresStore) DeleteAgentOwner(ctx context.Context, workspaceID, replicaID string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM agent_owners
+		WHERE workspace_id=$1 AND replica_id=$2`, workspaceID, replicaID)
+	return err
+}
 
 // ─── Guard events ─────────────────────────────────────────────────────────────
 

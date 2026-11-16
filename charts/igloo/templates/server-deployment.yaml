@@ -1,3 +1,6 @@
+{{- if and (gt (int .Values.server.replicas) 1) (not (or (include "igloo.postgres.bundled" .) .Values.server.database.postgresURL)) }}
+{{- fail "server.replicas > 1 needs PostgreSQL (the bundled one or server.database.postgresURL): the replicas share agent ownership, device-login codes and build logs through it. The in-memory, DynamoDB and MongoDB stores cannot hold that state." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,9 +41,30 @@ spec:
             - name: http
               containerPort: {{ .Values.server.port }}
               protocol: TCP
+            {{- if gt (int .Values.server.replicas) 1 }}
+            - name: internal
+              containerPort: 8081
+              protocol: TCP
+            {{- end }}
           env:
             - name: PORT
               value: {{ .Values.server.port | quote }}
+            {{- if gt (int .Values.server.replicas) 1 }}
+            # Replica-to-replica forwarding: each pod advertises its own IP so a peer
+            # holding a request can dial the pod that holds the workspace's agent.
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: IGLOO_REPLICA_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: IGLOO_INTERNAL_PORT
+              value: "8081"
+            - name: IGLOO_INTERNAL_ADDR
+              value: "$(POD_IP):8081"
+            {{- end }}
             - name: AWS_REGION
               value: {{ .Values.server.aws.region | quote }}
             - name: IGLOO_SERVER_URL
